@@ -12,12 +12,14 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 - [x] Pydantic v2 schemas — `BBox`, `SVGGenerationRequest`, `STLGenerationRequest`, `LicenseCheckRequest`, `MERCH_SPECS`
 - [x] CORS configured for `localhost:5173`
 - [x] `POST /api/generate/svg` — fetches OSM, renders SVG, saves to `/output/svg_output/`
-- [x] `POST /api/generate/stl` — fetches OSM, generates STL, saves to `/output/stl_output/`
+- [x] `POST /api/generate/stl` — fetches OSM, generates 3 STL parts, saves to `/output/stl_output/`
 - [x] `POST /api/license/check` — returns ODbL attribution
+- [x] `GET /api/osm/features` — Overpass proxy for 3D viewer (avoids browser CORS + User-Agent issues)
 - [x] `GET /health`
 - [x] StaticFiles mount serving generated outputs at `/output`
-- [x] Async Overpass client (`httpx`) with correct `User-Agent` header (overpass-api.de requires non-default UA)
-- [ ] Postgres/PostGIS — project storage, caching, user records *(deferred — running file-based for now)*
+- [x] Async Overpass client (`httpx`) with `User-Agent: heart-on-a-sleeve/1.0` (required by overpass-api.de)
+- [x] CPU-bound generators (SVG + STL) run in thread pool executor — event loop stays responsive
+- [ ] Postgres/PostGIS — project storage, caching, user records *(deferred)*
 - [ ] Alembic migrations
 - [ ] Rate limiting on Overpass calls
 
@@ -33,12 +35,12 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 - [x] Roads: two tiers (main/other), no casings, width by road class
 - [x] Buildings: footprint polygons, toggleable
 - [x] Railways: black lines in minimalist + vibrant
-- [x] Place labels: city/town/village/suburb/neighbourhood from OSM `place=*` nodes, sized by hierarchy
+- [x] Place labels: city/town/village/suburb/neighbourhood from OSM `place=*` nodes
 - [x] ODbL attribution embedded in SVG
 - [x] `include_buildings` and `include_labels` toggles
-- [x] Correct Y-axis projection (lat increases N, SVG y increases down)
+- [x] **cosLat projection** — east-west features scale correctly (no ~1.7× stretch at UK latitudes)
+- [x] **Edge clipping** — `<clipPath>` cuts roads/buildings at the canvas boundary
 - [x] Bbox passed from request (not derived from node spread)
-- [x] Merch-spec dimensions used (not hardcoded to tshirt)
 - [ ] Proper coordinate projection (pyproj EPSG:27700 for UK)
 - [ ] Bleed margins
 - [ ] Mug wrap perspective
@@ -46,20 +48,30 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 
 ---
 
-## Phase 3 — STL / 3D Generation ✅ Done (v1)
+## Phase 3 — STL / 3D Generation ✅ Done (v2)
 
-- [x] Three generation modes by merch type:
-  - **Topology** (`3d_print`): buildings at real OSM heights, roads raised 0.5 mm
-  - **Plexi-flat** (coaster, placemat): all buildings normalised to same flat top height — designed for clear acrylic overlay
-  - **Basic** (fabrics): flat base + roads + gentle building extrusions
-- [x] Physical plate sizes per merch type
-- [x] Building heights from `building:levels` and `building:height` OSM tags
-- [x] Road ribbons (shapely buffer + trimesh extrude)
-- [x] Waterway outlines
+Three interlocking pieces per print:
+
+- [x] **buildings.stl** (grey) — building pillars + road ribbons, Z=0→bldg_h
+  - Flat mode: extrudes fully merged `urban_union` (terrace rows → single block)
+  - Topology mode: individual buildings at proportional heights from OSM tags
+  - Outer collar walls (collar_mm wide) frame the assembly
+  - Polygon simplification (Douglas-Peucker) + gap closing (dilate→union→erode)
+- [x] **water.stl** (blue) — water bodies + buffered waterways, Z=water_start→water_end
+  - Building/road shapes punched out (pillars slot through)
+  - Water bodies expanded by `water_expand_mm` (printable minimum width)
+- [x] **land.stl** (green, locking lid) — Z=land_start→land_end
+  - Same outer footprint as grey base (collar_mm on all sides)
+  - Building holes so protrusions pierce through and clamp the stack
+  - Flat for coaster/placemat; SRTM terrain mesh for topology/relief mode
+- [x] All 8 parameters exposed in API and live viewer panel:
+  `bldg_height`, `water_start`, `water_end`, `land_start`, `land_end`, `gap_close_mm`, `water_expand_mm`, `min_bldg_mm`, `collar_mm`
+- [x] SRTM elevation via OpenTopoData (topology mode, 10×10 grid)
 - [x] shapely `make_valid` for degenerate polygons
-- [ ] SRTM terrain elevation
-- [ ] Watertightness check
+- [x] mapbox-earcut installed for trimesh triangulation
+- [ ] Watertight mesh validation
 - [ ] Hollowing for large prints
+- [ ] Terrain side walls (fully closed solid)
 
 ---
 
@@ -76,58 +88,64 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 ## Phase 5 — CesiumJS Frontend ✅ Done
 
 - [x] CesiumJS 1.141 with OSM tiles — no Ion token required
-- [x] Left-drag bbox drawing — aspect-ratio locked to merch type
+- [x] Left-drag bbox drawing — aspect-ratio locked with cos(lat) correction
 - [x] Move handle (drag inside shape)
 - [x] Corner resize handles (inner zone, maintains ratio)
-- [x] Corner rotate handles (outer ring, billboard entities with arc-arrow icon)
+- [x] Corner rotate handles (outer billboard ring with arc-arrow icon)
 - [x] Rotation in geographic space (correct cos(lat) scaling)
-- [x] Globe rotation disabled during draw/drag; scroll-zoom and middle-tilt always on
-- [x] Merch panel split: Fabrics & Transfers / 3D Prints (3-column grid)
+- [x] Globe controls: rotate=disabled during draw, scroll-zoom + middle-tilt always on
+- [x] Merch panel split: Fabrics & Transfers (3 col) / 3D Prints (3 col)
 - [x] Style selector: OSM Default / Minimalist / Vibrant
 - [x] Include toggles: Place labels, Buildings
 - [x] Generate button with elapsed timer and 90 s abort
-- [x] Post-generate: View SVG + View 3D buttons (both always shown)
+- [x] Post-generate: View SVG + View 3D buttons always shown
 - [x] Camera pitch constraints (20°–90° from horizon)
-- [x] Initial view: England centred
 - [x] Merch type change re-fits existing bbox (centre-preserved, ratio-adjusted)
 - [ ] Preset location dropdown
 - [ ] Scale bar
-- [ ] Geolocation ("centre on me")
+- [ ] Geolocation
 - [ ] EPSG:27700 coordinate display
 
 ---
 
 ## Phase 5b — SVG Viewer ✅ Done
 
-- [x] `/svg-viewer.html` — standalone pan/zoom SVG viewer
-- [x] Fetches SVG as text, parses `viewBox` for reliable dimensions
+- [x] `/svg-viewer.html` — standalone pan/zoom viewer
+- [x] Fetches SVG as text, parses `viewBox` for reliable dimensions (img.naturalWidth = 0 for SVGs)
 - [x] Scroll to zoom (towards cursor), left-drag to pan
 - [x] Fit-to-window (with margin) and Actual Size buttons
-- [x] Download link
-- [x] Dark background, matches app aesthetic
+- [x] Download link, dark background
 
 ---
 
 ## Phase 5c — 3D Map Viewer ✅ Done
 
-- [x] `/3d-viewer.html` — live Three.js OSM renderer (no STL required for preview)
-- [x] Fetches OSM directly from Overpass for selected bbox
-- [x] Buildings: `ExtrudeGeometry` from OSM footprints + real heights
-- [x] Three building height tiers (lo/mid/hi) with distinct shading
+- [x] `/3d-viewer.html` — live Three.js OSM renderer
+- [x] Fetches OSM via `/api/osm/features` backend proxy (no browser CORS issues)
+- [x] 60 s AbortController timeout with clear error message
+- [x] Buildings: `ExtrudeGeometry` from OSM footprints + real heights (3 tiers)
 - [x] Roads: hand-built ribbon geometry, width by road class
 - [x] Parks + water: flat coloured polygons
-- [x] Solid colours follow selected 2D style scheme (osm_default / minimalist / vibrant)
-- [x] Wireframe colours fixed per feature type: parks=green, water=blue, roads=orange/yellow, buildings=cyan/purple/white
-- [x] Black background in wireframe mode, scheme background in solid mode
+- [x] Mouse controls match Cesium (left=orbit, right=zoom, middle=pan)
+- [x] **Solid colours**: fixed print-material scheme (grey/blue/green) — not scheme-dependent
+- [x] **Wireframe**: per-type neon colours — parks=green, water=blue, roads=orange/yellow, buildings=cyan/purple/white; black background
 - [x] Grid: light blue solid / bright blue wireframe
-- [x] ACESFilmic tone mapping, directional sun + hemisphere + ambient lights, soft shadows
-- [x] OrbitControls — no auto-rotate by default
-- [x] Load progress bar (fetch → parse → render)
-- [x] Building + road count in overlay
-- [x] STL download link (from generated file)
-- [ ] Terrain elevation (SRTM)
+- [x] Load progress bar (fetch → parse → render), building + road count
+- [x] **Print Preview** — loads all 3 STL parts in correct print colours, spatially aligned
+- [x] **⟳ Regenerate STL** panel — 9 tunable parameters, calls API, updates downloads + Print Preview in-place
+- [x] STL download links for all 3 parts
+- [ ] Terrain elevation in live render (SRTM)
 - [ ] Roof shapes
 - [ ] Street-level textures
+
+---
+
+## Phase 5d — Design System ✅ Done
+
+- [x] `public/app.css` — single CSS file shared by all three pages
+- [x] 24 CSS custom properties (`--bg-*`, `--border-*`, `--text-*`, `--accent-*`, `--toggle-*`, `--radius-*`)
+- [x] Shared components: `.panel`, `.btn`, `.btn-primary`, `.divider`, `.section-label`, `.dl-label`, `.param-row`, `.toggle-row`, `.toggle`, `#loading`, `.hint`, `.spinner`
+- [x] Page-specific styles reduced to layout + unique components only
 
 ---
 
@@ -136,8 +154,8 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 - [ ] Load generated SVG into an editable panel
 - [ ] Layer toggles per OSM category
 - [ ] Per-layer colour picker and opacity slider
-- [ ] Road width slider, label size slider, saturation slider
-- [ ] "Reset to style preset" button
+- [ ] Road width, label size, saturation sliders
+- [ ] Reset to style preset
 - [ ] Re-render at 300 DPI and download
 
 ---
@@ -145,28 +163,26 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 ## Phase 7 — WooCommerce Integration 📋 Planned
 
 - [ ] WooCommerce REST API client
-- [ ] Create product from design project (SVG as product image)
+- [ ] Create product from design project
 - [ ] Price calculation: base cost + configurable markup
 - [ ] Order submission to POD provider
-- [ ] Webhook handlers: order paid → trigger POD, shipment → notify user
+- [ ] Webhook handlers
 
 ---
 
-## Phase 8 — POD Providers (Prodigi + Printful) 📋 Planned
+## Phase 8 — POD Providers 📋 Planned
 
-- [ ] Prodigi API: POST /orders, GET /orders/{id}, upload print file
+- [ ] Prodigi API: POST /orders, upload print file
 - [ ] Printful API: fallback/DTG coverage
-- [ ] Map merch types to provider product IDs
-- [ ] Fulfillment webhook → update order status in DB
+- [ ] Fulfillment webhook → update order status
 
 ---
 
 ## Phase 9 — User Auth & Dashboard 📋 Planned
 
-- [ ] JWT auth (fastapi-users or custom)
+- [ ] JWT auth
 - [ ] Save/reload design projects
-- [ ] Order history
-- [ ] Re-order past designs
+- [ ] Order history + re-order
 - [ ] Share design (public view-only link)
 
 ---
@@ -176,27 +192,26 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 - [ ] `backend/Dockerfile` (Python 3.14, multi-stage)
 - [ ] `frontend/Dockerfile` (Nginx + API proxy)
 - [ ] `docker-compose.prod.yml` with Traefik labels
-- [ ] Routing: `heart.stuartjatkinson.co.uk` → frontend, `/api/*` → backend
-- [ ] TLS via Cloudflare
-- [ ] Uptime Kuma monitors
-- [ ] Structured JSON logging
+- [ ] `heart.stuartjatkinson.co.uk` routing
+- [ ] TLS via Cloudflare, rate limiting
 - [ ] GitHub Actions: lint → test → build → push → deploy
 
 ---
 
-## Priority order
+## Current status summary
 
-| Phase | Priority | Status |
+| Phase | Status | Key deliverables |
 |---|---|---|
-| 1. Core Backend | P0 | ✅ Done |
-| 2. SVG Generation | P0 | ✅ Done |
-| 3. STL Generation | P0 | ✅ Done (v1) |
-| 4. Licence Tracker | P1 | ✅ Done (v1) |
-| 5. CesiumJS Frontend | P0 | ✅ Done |
-| 5b. SVG Viewer | P0 | ✅ Done |
-| 5c. 3D Map Viewer | P0 | ✅ Done |
-| 6. SVG Editor | P1 | 📋 Planned |
-| 7. WooCommerce | P1 | 📋 Planned |
-| 8. POD Providers | P1 | 📋 Planned |
-| 9. Auth + Dashboard | P2 | 📋 Planned |
-| 10. Deployment | P1 | 📋 Planned |
+| 1. Core Backend | ✅ Done | FastAPI, Overpass proxy, thread pool, all endpoints |
+| 2. SVG Generation | ✅ Done | 3 styles, cosLat projection, edge clipping, place labels |
+| 3. STL Generation | ✅ Done | 3-piece interlock, gap closing, topology mode, 9 tunable params |
+| 4. Licence Tracker | ✅ Done (v1) | ODbL attribution in every output |
+| 5. CesiumJS Frontend | ✅ Done | Draw/move/resize/rotate, merch panel, style selector |
+| 5b. SVG Viewer | ✅ Done | Pan/zoom, fit, download |
+| 5c. 3D Map Viewer | ✅ Done | Live OSM render, Print Preview, live regenerate |
+| 5d. Design System | ✅ Done | Unified CSS, variables, shared components |
+| 6. SVG Editor | 📋 Planned | |
+| 7. WooCommerce | 📋 Planned | |
+| 8. POD Providers | 📋 Planned | |
+| 9. Auth + Dashboard | 📋 Planned | |
+| 10. Deployment | 📋 Planned | |
