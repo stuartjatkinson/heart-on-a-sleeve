@@ -163,30 +163,32 @@ class SVGGenerator:
         svg.add(svg.rect(insert=(0, 0), size=(self._svg_w, self._svg_h),
                          fill=palette['background']))
 
-        # Hard clip — everything outside the canvas boundary is cut off
+        # Hard clip — everything outside the canvas boundary is cut off.
+        # Draw methods use svg (Drawing) to CREATE elements but self._g (Group) to ADD them,
+        # because svgwrite Group objects don't expose element factory methods.
         clip = svg.defs.add(svg.clipPath(id='map-clip'))
         clip.add(svg.rect(insert=(0, 0), size=(self._svg_w, self._svg_h)))
-        g = svg.add(svg.g(clip_path='url(#map-clip)'))
+        self._g = svg.add(svg.g(clip_path='url(#map-clip)'))
 
         # Draw order: land → water → buildings → roads → railways → labels
         if include_parks:
-            self._draw_landuse(g, palette)
+            self._draw_landuse(svg, palette)
 
-        self._draw_water(g, palette)
+        self._draw_water(svg, palette)
 
         if palette['show_buildings'] and include_buildings:
-            self._draw_buildings(g, palette)
+            self._draw_buildings(svg, palette)
 
         if include_roads:
-            self._draw_roads(g, palette)
+            self._draw_roads(svg, palette)
 
         if palette['show_railways']:
-            self._draw_railways(g, palette)
+            self._draw_railways(svg, palette)
 
         if include_labels and palette['show_labels']:
-            self._draw_labels(g, palette)
+            self._draw_labels(svg, palette)
 
-        # Attribution outside the clip (always visible)
+        # Attribution sits outside the clip group (always fully visible)
         self._draw_attribution(svg)
 
         sio = StringIO()
@@ -264,8 +266,8 @@ class SVGGenerator:
             pts = self._way_points(way)
             if len(pts) < 3:
                 continue
-            svg.add(svg.path(d=self._path_d(pts, close=True),
-                             fill=p[group], stroke='none'))
+            self._g.add(svg.path(d=self._path_d(pts, close=True),
+                                fill=p[group], stroke='none'))
 
     def _landuse_group(self, tags: dict) -> str | None:
         lu = tags.get('landuse')
@@ -294,17 +296,17 @@ class SVGGenerator:
             if nat == 'water' or lu in WATER_POLYGON or ww == 'riverbank':
                 pts = self._way_points(way)
                 if len(pts) >= 3:
-                    svg.add(svg.path(d=self._path_d(pts, close=True),
-                                     fill=color, stroke='none'))
+                    self._g.add(svg.path(d=self._path_d(pts, close=True),
+                                        fill=color, stroke='none'))
 
             elif ww in WATERWAY_LINE:
                 pts = self._way_points(way)
                 if len(pts) >= 2:
                     w = WATERWAY_LINE_WIDTH.get(ww, 1.5)
-                    svg.add(svg.path(d=self._path_d(pts),
-                                     stroke=color, stroke_width=w,
-                                     fill='none', stroke_linecap='round',
-                                     stroke_linejoin='round'))
+                    self._g.add(svg.path(d=self._path_d(pts),
+                                        stroke=color, stroke_width=w,
+                                        fill='none', stroke_linecap='round',
+                                        stroke_linejoin='round'))
 
     def _draw_buildings(self, svg: svgwrite.Drawing, p: dict) -> None:
         for way in self.ways:
@@ -314,8 +316,8 @@ class SVGGenerator:
             pts = self._way_points(way)
             if len(pts) < 3:
                 continue
-            svg.add(svg.path(d=self._path_d(pts, close=True),
-                             fill=p['building'], stroke='none'))
+            self._g.add(svg.path(d=self._path_d(pts, close=True),
+                                fill=p['building'], stroke='none'))
 
     def _draw_roads(self, svg: svgwrite.Drawing, p: dict) -> None:
         for way in self.ways:
@@ -342,10 +344,10 @@ class SVGGenerator:
                 continue
 
             w = ROAD_WIDTH.get(hw, 1.5)
-            svg.add(svg.path(d=self._path_d(pts),
-                             stroke=color, stroke_width=w,
-                             fill='none', stroke_linecap='round',
-                             stroke_linejoin='round'))
+            self._g.add(svg.path(d=self._path_d(pts),
+                                stroke=color, stroke_width=w,
+                                fill='none', stroke_linecap='round',
+                                stroke_linejoin='round'))
 
     def _draw_railways(self, svg: svgwrite.Drawing, p: dict) -> None:
         for way in self.ways:
@@ -357,10 +359,10 @@ class SVGGenerator:
             if len(pts) < 2:
                 continue
             w = RAILWAY_WIDTH.get(rw, 1.5)
-            svg.add(svg.path(d=self._path_d(pts),
-                             stroke=p['railway'], stroke_width=w,
-                             fill='none', stroke_linecap='butt',
-                             stroke_linejoin='round'))
+            self._g.add(svg.path(d=self._path_d(pts),
+                                stroke=p['railway'], stroke_width=w,
+                                fill='none', stroke_linecap='butt',
+                                stroke_linejoin='round'))
 
     def _draw_labels(self, svg: svgwrite.Drawing, p: dict) -> None:
         PLACE_STYLE = {
@@ -382,7 +384,7 @@ class SVGGenerator:
             x, y = self._project(node['lon'], node['lat'])
             style = PLACE_STYLE[place]
             label = name.upper() if style['upper'] else name
-            svg.add(svg.text(
+            self._g.add(svg.text(
                 label,
                 insert=(x, y),
                 font_size=str(style['size']),
