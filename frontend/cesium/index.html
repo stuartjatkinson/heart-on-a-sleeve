@@ -13,18 +13,18 @@
         /* ── Control Panel ── */
         #panel {
             position: absolute; top: 20px; left: 20px; width: 300px;
-            background: rgba(12,12,18,0.93); border: 1px solid #2a2a36;
+            background: rgba(10,10,16,0.96); border: 1px solid #38384a;
             border-radius: 12px; padding: 18px; z-index: 1000;
             backdrop-filter: blur(12px);
             max-height: calc(100vh - 40px); overflow-y: auto;
         }
         #panel h2 { font-size: 15px; font-weight: 700; margin-bottom: 14px; color: #fff; letter-spacing: 0.02em; }
         #panel h3 {
-            font-size: 10px; font-weight: 600; color: #555;
+            font-size: 10px; font-weight: 600; color: #8a8aaa;
             text-transform: uppercase; letter-spacing: 0.1em; margin: 14px 0 7px;
         }
         .section-label {
-            font-size: 10px; color: #444; text-transform: uppercase;
+            font-size: 10px; color: #7070a0; text-transform: uppercase;
             letter-spacing: 0.08em; margin: 10px 0 5px;
         }
         .section { margin-bottom: 16px; }
@@ -32,14 +32,14 @@
         /* Merch grids */
         .merch-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
         .merch-btn {
-            background: #141420; border: 1.5px solid #2a2a36; color: #777;
+            background: #141420; border: 1.5px solid #2a2a36; color: #aaa;
             padding: 8px 4px; border-radius: 7px; cursor: pointer;
             font-size: 11px; text-align: center; transition: all 0.12s; line-height: 1.3;
         }
-        .merch-btn:hover { border-color: #444; color: #ccc; }
+        .merch-btn:hover { border-color: #555; color: #eee; }
         .merch-btn.active { border-color: #4a9eff; color: #4a9eff; background: rgba(74,158,255,0.07); }
-        .merch-btn .ratio { font-size: 9px; color: #444; margin-top: 2px; }
-        .merch-btn.active .ratio { color: #2a6aaa; }
+        .merch-btn .ratio { font-size: 9px; color: #666; margin-top: 2px; }
+        .merch-btn.active .ratio { color: #3a7acc; }
 
         .merch-divider {
             border: none; border-top: 1px solid #1e1e28; margin: 8px 0 5px;
@@ -48,23 +48,23 @@
         /* Style selector */
         .style-grid { display: flex; flex-direction: column; gap: 5px; }
         .style-btn {
-            background: #141420; border: 1.5px solid #2a2a36; color: #777;
+            background: #141420; border: 1.5px solid #2a2a36; color: #aaa;
             padding: 7px 10px; border-radius: 6px; cursor: pointer;
             font-size: 12px; text-align: left; transition: all 0.12s;
         }
-        .style-btn:hover { border-color: #444; color: #bbb; }
-        .style-btn.active { border-color: #4a9eff; color: #fff; background: rgba(74,158,255,0.05); }
+        .style-btn:hover { border-color: #555; color: #ddd; }
+        .style-btn.active { border-color: #4a9eff; color: #fff; background: rgba(74,158,255,0.07); }
 
         /* Toggles */
         .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; }
-        .toggle-row span { font-size: 12px; color: #aaa; }
-        .toggle { width: 38px; height: 20px; background: #2a2a36; border-radius: 10px; position: relative; cursor: pointer; flex-shrink: 0; }
-        .toggle::after { content: ''; position: absolute; width: 14px; height: 14px; background: #555; border-radius: 50%; top: 3px; left: 3px; transition: 0.18s; }
+        .toggle-row span { font-size: 12px; color: #ccc; }
+        .toggle { width: 38px; height: 20px; background: #333345; border-radius: 10px; position: relative; cursor: pointer; flex-shrink: 0; }
+        .toggle::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 3px; left: 3px; transition: 0.18s; }
         .toggle.on { background: #4a9eff; }
         .toggle.on::after { left: 21px; background: #fff; }
 
         /* Bbox display */
-        #bbox-display { font-size: 10px; color: #444; font-family: monospace; margin-top: 6px; line-height: 1.7; }
+        #bbox-display { font-size: 10px; color: #888; font-family: monospace; margin-top: 6px; line-height: 1.7; }
 
         /* Buttons */
         .btn-primary {
@@ -75,20 +75,20 @@
         .btn-primary:hover { background: #3a8eef; }
         .btn-primary:disabled { background: #1e3050; color: #3a5a7a; cursor: not-allowed; }
         .btn-secondary {
-            flex: 1; padding: 9px 6px; background: transparent; color: #777;
-            border: 1px solid #2a2a36; border-radius: 7px; font-size: 12px;
+            flex: 1; padding: 9px 6px; background: transparent; color: #aaa;
+            border: 1px solid #333345; border-radius: 7px; font-size: 12px;
             cursor: pointer; transition: all 0.12s; text-align: center;
         }
         .btn-secondary:hover { border-color: #4a9eff; color: #4a9eff; }
         .btn-draw {
-            width: 100%; padding: 9px; background: transparent; color: #777;
-            border: 1px solid #2a2a36; border-radius: 7px; font-size: 12px;
+            width: 100%; padding: 9px; background: transparent; color: #aaa;
+            border: 1px solid #333345; border-radius: 7px; font-size: 12px;
             cursor: pointer; margin-bottom: 6px; transition: all 0.12s; text-align: center;
         }
-        .btn-draw:hover { border-color: #555; color: #aaa; }
+        .btn-draw:hover { border-color: #666; color: #ddd; }
 
         #output-btns { display: none; gap: 7px; margin-top: 8px; }
-        #status { font-size: 11px; color: #444; margin-top: 10px; text-align: center; min-height: 16px; }
+        #status { font-size: 11px; color: #999; margin-top: 10px; text-align: center; min-height: 16px; }
 
         .spinner {
             display: none; width: 16px; height: 16px; border: 2px solid #2a3a4a;
