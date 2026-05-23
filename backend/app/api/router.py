@@ -70,6 +70,13 @@ async def fetch_osm(bbox: BBox):
     return {"element_count": len(data.get("elements", [])), "data": data}
 
 
+@app.get("/api/osm/features")
+async def get_osm_features(west: float, south: float, east: float, north: float):
+    """Proxy for the 3D viewer — avoids direct browser→Overpass fetch (CORS + UA issues)."""
+    bbox = BBox(west=west, south=south, east=east, north=north)
+    return await osm_fetcher.fetch_area(bbox)
+
+
 @app.post("/api/osm/license-info")
 async def get_license_info(bbox: BBox):
     return await osm_fetcher.get_license_info(bbox)
