@@ -550,7 +550,7 @@ async function generate(): Promise<void> {
       const p = new URLSearchParams({
         west:  String(b.west),  south: String(b.south),
         east:  String(b.east),  north: String(b.north),
-        style: mapStyle,
+        style: mapStyle, merch: merchType,
       });
       if (stlResult.stl_buildings_url) p.set('stl_buildings', stlResult.stl_buildings_url);
       if (stlResult.stl_land_url)      p.set('stl_land',      stlResult.stl_land_url);

@@ -121,9 +121,15 @@ async def generate_stl(req: STLGenerationRequest):
         stl_generator.generate,
         osm_data=osm_data,
         merch_type=req.merch_type,
-        height_mm=req.height_mm,
-        base_thickness_mm=req.base_thickness_mm,
         bbox=bbox_tuple,
+        bldg_height=req.bldg_height,
+        water_start=req.water_start,
+        water_end=req.water_end,
+        land_start=req.land_start,
+        land_end=req.land_end,
+        gap_close_mm=req.gap_close_mm,
+        water_expand_mm=req.water_expand_mm,
+        min_bldg_mm=req.min_bldg_mm,
     ))
     from datetime import datetime
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")

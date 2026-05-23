@@ -54,12 +54,15 @@ WATERWAY_WIDTH_MM: dict[str, float] = {
     'river': 4.0, 'canal': 3.0, 'stream': 1.5, 'drain': 1.0,
 }
 
-# Height constants (mm)
-BLDG_H_FLAT  = 5.0   # uniform building height for flat mode
-WATER_H      = 1.5   # water layer thickness
-MIN_BLDG_H   = 1.0   # minimum height for any building
-GAP_CLOSE_MM = 0.8   # gaps smaller than this between buildings are merged
-WATER_EXPAND = 0.5   # how much water expands beyond its OSM boundary
+# Default height constants (mm) — all overridable via STLGenerationRequest
+BLDG_H_DEFAULT   = 4.0   # buildings + roads: 0 → BLDG_H
+WATER_START_DEF  = 1.0   # water layer bottom
+WATER_END_DEF    = 2.0   # water layer top (sea level)
+LAND_START_DEF   = 2.0   # land layer bottom
+LAND_END_DEF     = 3.0   # land layer top
+MIN_BLDG_H       = 1.0   # minimum building height
+GAP_CLOSE_MM     = 0.8   # gaps smaller than this between buildings are merged
+WATER_EXPAND     = 0.5   # how much water expands beyond its OSM boundary
 
 
 class STLGenerator:
@@ -68,9 +71,19 @@ class STLGenerator:
         self,
         osm_data: dict,
         merch_type: str,
-        height_mm: float = 5.0,
-        base_thickness_mm: float = 2.0,
         bbox: tuple[float, float, float, float] | None = None,
+        # Tunable layer heights
+        bldg_height:     float = BLDG_H_DEFAULT,
+        water_start:     float = WATER_START_DEF,
+        water_end:       float = WATER_END_DEF,
+        land_start:      float = LAND_START_DEF,
+        land_end:        float = LAND_END_DEF,
+        gap_close_mm:    float = GAP_CLOSE_MM,
+        water_expand_mm: float = WATER_EXPAND,
+        min_bldg_mm:     float = MIN_BLDG_H,
+        # Legacy compat
+        height_mm: float = BLDG_H_DEFAULT,
+        base_thickness_mm: float = 2.0,
     ) -> dict[str, BytesIO]:
         west, south, east, north = bbox or (-0.13, 51.50, -0.11, 51.52)
         plate_w, plate_h = PLATE_MM.get(merch_type, (100.0, 100.0))
@@ -96,44 +109,44 @@ class STLGenerator:
         topology = merch_type in TOPOLOGY_TYPES
         elev_grid = _fetch_elevation(west, south, east, north) if topology else None
 
-        bldg_h = height_mm if topology else BLDG_H_FLAT
-
         return self._build(
             ways, way_pts, plate_w, plate_h,
-            bldg_h, topology, elev_grid,
+            bldg_height, water_start, water_end, land_start, land_end,
+            gap_close_mm, water_expand_mm, min_bldg_mm,
+            topology, elev_grid,
         )
 
     # ── Main build ─────────────────────────────────────────────────────────────
 
     def _build(
         self, ways, way_pts,
-        plate_w, plate_h, bldg_h,
+        plate_w, plate_h,
+        bldg_h, water_start, water_end, land_start, land_end,
+        gap_close, water_expand, min_bldg,
         topology, elev_grid,
     ) -> dict[str, BytesIO]:
 
         # ── 1. Collect raw shapes ──────────────────────────────────────────────
-        raw_bldgs:   list[tuple[Polygon, float]] = []  # (poly, height_mm)
-        raw_roads:   list[Polygon]               = []
-        raw_water:   list[Polygon]               = []
+        raw_bldgs: list[tuple[Polygon, float]] = []
+        raw_roads: list[Polygon] = []
+        raw_water: list[Polygon] = []
 
         for way in ways:
             tags = way.get('tags', {})
             pts  = way_pts(way)
 
-            # Buildings
             if tags.get('building') not in (None, 'no') and len(pts) >= 3:
                 poly = _make_poly(pts)
                 if poly:
                     if topology:
                         levels = float(tags.get('building:levels', 2))
                         h = float(tags.get('building:height', levels * 3.2))
-                        h = max(h / 40.0 * bldg_h, MIN_BLDG_H)
+                        h = max(h / 40.0 * bldg_h, min_bldg)
                     else:
                         h = bldg_h
                     raw_bldgs.append((poly, h))
                 continue
 
-            # Roads
             hw = tags.get('highway')
             if hw in ROAD_WIDTH_MM and len(pts) >= 2:
                 poly = _buffer_line(pts, ROAD_WIDTH_MM[hw])
@@ -141,50 +154,38 @@ class STLGenerator:
                     raw_roads.append(poly)
                 continue
 
-            # Water polygons
             if (tags.get('natural') == 'water' or
                     tags.get('landuse') in WATER_POLY_TAGS) and len(pts) >= 3:
-                poly = _make_poly(pts, buffer=WATER_EXPAND)
+                poly = _make_poly(pts, buffer=water_expand)
                 if poly:
                     raw_water.append(poly)
                 continue
 
-            # Waterways
             ww = tags.get('waterway')
             if ww in WATERWAY_WIDTH_MM and len(pts) >= 2:
-                # Expand waterways by extra amount so thin streams are printable
-                poly = _buffer_line(pts, WATERWAY_WIDTH_MM[ww] + WATER_EXPAND)
+                poly = _buffer_line(pts, WATERWAY_WIDTH_MM[ww] + water_expand)
                 if poly:
                     raw_water.append(poly)
 
         # ── 2. Simplify & merge buildings ──────────────────────────────────────
-        # Simplify individual outlines first
-        bldg_polys = []
-        bldg_heights = []
+        bldg_polys, bldg_heights = [], []
         for poly, h in raw_bldgs:
-            s = poly.simplify(0.4, preserve_topology=True)
-            s = make_valid(s)
+            s = make_valid(poly.simplify(0.4, preserve_topology=True))
             for p in _geom_parts(s):
                 if p.area > 0.1:
                     bldg_polys.append(p)
-                    bldg_heights.append(h)
+                    bldg_heights.append(max(h, min_bldg))
 
-        # Close gaps < GAP_CLOSE_MM between buildings
         if bldg_polys:
-            half = GAP_CLOSE_MM / 2
-            expanded = [p.buffer(half, join_style=2) for p in bldg_polys]
-            merged = make_valid(unary_union(expanded))
-            # Shrink back slightly less than we expanded so merges stick
-            merged = merged.buffer(-half * 0.85, join_style=2)
-            merged = make_valid(merged)
+            half = gap_close / 2
+            merged = make_valid(unary_union([p.buffer(half, join_style=2) for p in bldg_polys]))
+            merged = make_valid(merged.buffer(-half * 0.85, join_style=2))
             bldg_union = merged
         else:
             bldg_union = Polygon()
 
-        road_union  = make_valid(unary_union(raw_roads))  if raw_roads  else Polygon()
-        water_union = make_valid(unary_union(raw_water))  if raw_water  else Polygon()
-
-        # Urban structures (buildings + roads) combined for cutout purposes
+        road_union  = make_valid(unary_union(raw_roads)) if raw_roads else Polygon()
+        water_union = make_valid(unary_union(raw_water)) if raw_water else Polygon()
         urban_union = make_valid(bldg_union.union(road_union)) if not road_union.is_empty else bldg_union
 
         # ── 3. Build three pieces ──────────────────────────────────────────────
@@ -192,12 +193,12 @@ class STLGenerator:
             'buildings': _export(self._buildings_piece(
                 bldg_polys, bldg_heights, raw_roads, bldg_h, topology
             )),
-            'water':  _export(self._water_piece(
-                water_union, urban_union, plate_w, plate_h, bldg_h
+            'water': _export(self._water_piece(
+                water_union, urban_union, plate_w, plate_h, water_start, water_end
             )),
-            'land':   _export(self._land_piece(
+            'land': _export(self._land_piece(
                 urban_union, water_union, plate_w, plate_h,
-                bldg_h, topology, elev_grid
+                land_start, land_end, topology, elev_grid
             )),
         }
 
@@ -227,63 +228,50 @@ class STLGenerator:
 
     def _water_piece(
         self, water_union, urban_union,
-        plate_w, plate_h, bldg_h,
+        plate_w, plate_h, water_start, water_end,
     ) -> list[trimesh.Trimesh]:
         if water_union.is_empty:
             return []
-
-        # Clip water to plate boundary
         plate_rect = shapely_box(0, 0, plate_w, plate_h)
         water = make_valid(water_union.intersection(plate_rect))
-
-        # Punch holes where buildings/roads are (pillars slot through)
         if not urban_union.is_empty:
             water = make_valid(water.difference(urban_union))
-
+        thickness = water_end - water_start
         meshes = []
         for p in _geom_parts(water):
-            m = _extrude(p, WATER_H)
+            m = _extrude(p, thickness, z_base=water_start)
             if m: meshes.append(m)
         return meshes
 
-    # ── Land piece (locking lid) ───────────────────────────────────────────────
-
     def _land_piece(
         self, urban_union, water_union,
-        plate_w, plate_h, bldg_h,
+        plate_w, plate_h,
+        land_start, land_end,
         topology, elev_grid,
     ) -> list[trimesh.Trimesh]:
         plate_rect = shapely_box(0, 0, plate_w, plate_h)
-
-        # Land = everything not urban and not water
         land = plate_rect
         if not urban_union.is_empty:
             land = make_valid(land.difference(urban_union))
         if not water_union.is_empty:
             land = make_valid(land.difference(water_union.intersection(plate_rect)))
 
-        land_thickness = bldg_h - WATER_H
+        thickness = land_end - land_start
 
         if not topology or elev_grid is None:
-            # Flat lid: extrude from WATER_H to BLDG_H
             meshes = []
             for p in _geom_parts(land):
-                m = _extrude(p, land_thickness, z_base=WATER_H)
+                m = _extrude(p, thickness, z_base=land_start)
                 if m: meshes.append(m)
             return meshes
         else:
-            # Topology lid: terrain top surface, flat bottom at WATER_H
-            return self._terrain_lid(land, elev_grid, plate_w, plate_h,
-                                     WATER_H, bldg_h)
+            return self._terrain_lid(land, elev_grid, plate_w, plate_h, land_start, land_end)
 
     def _terrain_lid(
         self, land_shape, elev_grid,
-        plate_w, plate_h, z_bottom, z_max,
+        plate_w, plate_h, z_bottom, z_top,
     ) -> list[trimesh.Trimesh]:
-        """Build a terrain surface lid for the land piece."""
-        terrain = _build_terrain_mesh(elev_grid, plate_w, plate_h, z_bottom, z_max - z_bottom)
-        # We return just the terrain — in practice a slicer will close the bottom
-        # TODO: add side walls and bottom face for a fully watertight solid
+        terrain = _build_terrain_mesh(elev_grid, plate_w, plate_h, z_bottom, z_top - z_bottom)
         return [terrain] if terrain else []
 
 

@@ -27,6 +27,11 @@
     .btn.on    { border-color: #4a9eff; color: #4a9eff; background: rgba(74,158,255,0.06); }
     .divider   { border-top: 1px solid #12121a; margin: 8px 0 4px; }
     .dl-label  { font-size: 10px; color: #2a2a36; margin-bottom: 2px; }
+    .param-row { display:flex; align-items:center; gap:4px; margin:3px 0; font-size:10px; color:#444; }
+    .param-row label { min-width:72px; color:#555; }
+    .param-row input { width:46px; background:#0e0e14; border:1px solid #2a2a36; border-radius:3px;
+                       color:#aaa; font-size:10px; padding:2px 4px; text-align:center; }
+    .param-row span  { color:#333; }
     #hint { font-size: 10px; color: #1e1e2a; margin-top: 8px; line-height: 1.9;
             border-top: 1px solid #12121a; padding-top: 7px; }
 
@@ -62,6 +67,20 @@
     <a class="btn" id="dl-water"     download="water.stl">↓ Water (blue)</a>
   </div>
 
+  <div id="params-panel" style="display:none">
+    <div class="divider"></div>
+    <div class="dl-label">Layer heights (mm)</div>
+    <div class="param-row"><label>Buildings 0 →</label><input type="number" id="p-bldg-h"   value="4"   step="0.5" min="1" max="20"><span>mm</span></div>
+    <div class="param-row"><label>Water</label><input type="number" id="p-water-s" value="1"   step="0.5" min="0" max="10">→<input type="number" id="p-water-e" value="2" step="0.5" min="0" max="10"><span>mm</span></div>
+    <div class="param-row"><label>Land</label><input type="number" id="p-land-s"  value="2"   step="0.5" min="0" max="10">→<input type="number" id="p-land-e"  value="3" step="0.5" min="0" max="10"><span>mm</span></div>
+    <div class="dl-label" style="margin-top:6px">Processing</div>
+    <div class="param-row"><label>Gap close</label><input type="number" id="p-gap"   value="0.8" step="0.1" min="0" max="5"><span>mm</span></div>
+    <div class="param-row"><label>Water expand</label><input type="number" id="p-wexp"  value="0.5" step="0.1" min="0" max="3"><span>mm</span></div>
+    <div class="param-row"><label>Min bldg h</label><input type="number" id="p-minb"  value="1"   step="0.5" min="0.5" max="5"><span>mm</span></div>
+    <button class="btn" id="btn-regen" style="margin-top:6px;border-color:#4a9eff;color:#4a9eff">⟳ Regenerate STL</button>
+    <div id="regen-status" style="font-size:10px;color:#555;margin-top:4px;text-align:center"></div>
+  </div>
+
   <button class="btn" onclick="window.close()">✕ Close</button>
   <div id="hint">
     Left drag — orbit<br>
@@ -88,9 +107,10 @@ const west  = parseFloat(p.get('west')  ?? '-0.13');
 const south = parseFloat(p.get('south') ?? '51.50');
 const east  = parseFloat(p.get('east')  ?? '-0.11');
 const north = parseFloat(p.get('north') ?? '51.52');
-const stlBuildings = p.get('stl_buildings');
-const stlLand      = p.get('stl_land');
-const stlWater     = p.get('stl_water');
+const merch = p.get('merch') ?? '3d_print';
+let stlBuildings = p.get('stl_buildings');
+let stlLand      = p.get('stl_land');
+let stlWater     = p.get('stl_water');
 const hasPrintParts = !!(stlBuildings && stlLand && stlWater);
 
 // ── Projection ────────────────────────────────────────────────────────────────
@@ -144,10 +164,12 @@ controls.autoRotate     = false;
 controls.maxPolarAngle  = Math.PI / 2 - 0.05;
 controls.minDistance    = 20;
 controls.maxDistance    = sceneW * 8;
-// ── Match Cesium: left=orbit, right=zoom, middle=pan ─────────────────────────
+// Match Cesium: left=orbit, middle=pan, right=zoom
+// Note: THREE.MOUSE enum values happen to be inverted vs what OrbitControls
+// uses internally, so the assignment looks swapped but produces correct behaviour.
 controls.mouseButtons = {
-  LEFT:   THREE.MOUSE.ROTATE,
-  MIDDLE: THREE.MOUSE.PAN,
+  LEFT:   THREE.MOUSE.PAN,
+  MIDDLE: THREE.MOUSE.ROTATE,
   RIGHT:  THREE.MOUSE.DOLLY,
 };
 
@@ -452,6 +474,71 @@ document.getElementById('btn-wire').addEventListener('click', function() {
   this.classList.toggle('on', wireframe);
   this.textContent = wireframe ? '⬡ Solid' : '⬡ Wireframe';
 });
+
+// ── Parameters panel + live regenerate ───────────────────────────────────────
+if (hasPrintParts) {
+  document.getElementById('params-panel').style.display = 'block';
+
+  // Populate inputs from URL defaults
+  const pGet = (id, def) => { const el = document.getElementById(id); if (el) el.value = def; };
+  pGet('p-bldg-h',  4);   pGet('p-water-s', 1);  pGet('p-water-e', 2);
+  pGet('p-land-s',  2);   pGet('p-land-e',  3);
+  pGet('p-gap',   0.8);   pGet('p-wexp',  0.5);   pGet('p-minb',   1);
+
+  document.getElementById('btn-regen').addEventListener('click', async function() {
+    const regenStatus = document.getElementById('regen-status');
+    this.disabled = true;
+    this.textContent = '⟳ Regenerating…';
+    regenStatus.textContent = 'Fetching new STL from backend…';
+
+    const body = {
+      bbox:  { west, south, east, north },
+      merch_type:      merch,
+      bldg_height:     parseFloat(document.getElementById('p-bldg-h').value),
+      water_start:     parseFloat(document.getElementById('p-water-s').value),
+      water_end:       parseFloat(document.getElementById('p-water-e').value),
+      land_start:      parseFloat(document.getElementById('p-land-s').value),
+      land_end:        parseFloat(document.getElementById('p-land-e').value),
+      gap_close_mm:    parseFloat(document.getElementById('p-gap').value),
+      water_expand_mm: parseFloat(document.getElementById('p-wexp').value),
+      min_bldg_mm:     parseFloat(document.getElementById('p-minb').value),
+    };
+
+    try {
+      const resp  = await fetch('/api/generate/stl', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      if (!resp.ok) throw new Error(`Server ${resp.status}`);
+      const result = await resp.json();
+
+      // Update download links
+      stlBuildings = result.stl_buildings_url;
+      stlLand      = result.stl_land_url;
+      stlWater     = result.stl_water_url;
+      document.getElementById('dl-buildings').href = stlBuildings;
+      document.getElementById('dl-land').href      = stlLand;
+      document.getElementById('dl-water').href     = stlWater;
+
+      // Reload print preview with new parts
+      printGroup.clear();
+      printLoaded = false;
+
+      if (showingPrint) {
+        await loadPrintParts();
+      }
+
+      regenStatus.textContent = 'Done ✓';
+      setTimeout(() => { regenStatus.textContent = ''; }, 3000);
+    } catch (err) {
+      regenStatus.textContent = `Error: ${err.message}`;
+    } finally {
+      this.disabled = false;
+      this.textContent = '⟳ Regenerate STL';
+    }
+  });
+}
 
 // ── Auto-rotate ───────────────────────────────────────────────────────────────
 document.getElementById('btn-rotate').addEventListener('click', function() {

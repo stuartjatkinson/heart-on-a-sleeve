@@ -57,7 +57,18 @@ class SVGGenerationRequest(BaseModel):
 class STLGenerationRequest(BaseModel):
     bbox: BBox
     merch_type: str = "3d_print"
-    height_mm: float = 5.0
+    # Layer heights (mm) — all tunable from the viewer
+    bldg_height: float = 4.0       # buildings + roads: 0 → bldg_height
+    water_start: float = 1.0       # water layer bottom
+    water_end:   float = 2.0       # water layer top  (sea level)
+    land_start:  float = 2.0       # land layer bottom
+    land_end:    float = 3.0       # land layer top
+    # Geometry processing
+    gap_close_mm:    float = 0.8   # merge buildings with gap < this
+    water_expand_mm: float = 0.5   # expand water bodies by this amount
+    min_bldg_mm:     float = 1.0   # minimum building height
+    # Legacy (ignored — kept for backward compat with old callers)
+    height_mm: float = 4.0
     base_thickness_mm: float = 2.0
 
 
