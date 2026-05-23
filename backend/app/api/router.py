@@ -106,24 +106,22 @@ async def generate_stl(req: STLGenerationRequest):
     global _current_bbox
     osm_data = await osm_fetcher.fetch_area(req.bbox)
     _current_bbox = req.bbox.model_dump()
-    stl_io = stl_generator.generate(
+    from datetime import datetime
+    parts = stl_generator.generate(
         osm_data=osm_data,
         merch_type=req.merch_type,
         height_mm=req.height_mm,
         base_thickness_mm=req.base_thickness_mm,
-        bbox=(
-            req.bbox.west,
-            req.bbox.south,
-            req.bbox.east,
-            req.bbox.north,
-        ),
+        bbox=(req.bbox.west, req.bbox.south, req.bbox.east, req.bbox.north),
     )
-    from datetime import datetime
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    filename = os.path.join(DATA_DIR, "stl_output", f"design_{timestamp}.stl")
-    with open(filename, "wb") as f:
-        f.write(stl_io.read())
-    return {"stl_path": filename, "stl_url": f"/output/stl_output/design_{timestamp}.stl", "merch_type": req.merch_type}
+    urls = {}
+    for part_name, bio in parts.items():
+        fname = f"design_{timestamp}_{part_name}.stl"
+        with open(os.path.join(DATA_DIR, "stl_output", fname), "wb") as f:
+            f.write(bio.read())
+        urls[f"stl_{part_name}_url"] = f"/output/stl_output/{fname}"
+    return {**urls, "merch_type": req.merch_type}
 
 
 @app.post("/api/license/check")

@@ -47,9 +47,15 @@
   <h2>3D Map Preview</h2>
   <div id="status">Loading…</div>
   <div id="stats"></div>
+  <button class="btn" id="btn-mode" style="display:none">🖨 Print Preview</button>
   <button class="btn" id="btn-wire">⬡ Wireframe</button>
   <button class="btn" id="btn-rotate">▶ Auto-rotate</button>
-  <a class="btn" id="btn-stl" style="display:none" download="design.stl">↓ Download STL</a>
+  <div id="stl-links" style="display:none; margin-top:6px; border-top:1px solid #1e1e2a; padding-top:8px;">
+    <div style="font-size:10px;color:#333;margin-bottom:4px;">Print files (3 colours):</div>
+    <a class="btn" id="dl-buildings" style="margin-top:3px" download="buildings.stl">↓ Buildings (grey)</a>
+    <a class="btn" id="dl-land"      style="margin-top:3px" download="land.stl">↓ Land (green)</a>
+    <a class="btn" id="dl-water"     style="margin-top:3px" download="water.stl">↓ Water (blue)</a>
+  </div>
   <button class="btn" onclick="window.close()">✕ Close</button>
   <div id="hint">Left drag — orbit<br>Scroll — zoom<br>Right drag — pan</div>
 </div>
@@ -70,8 +76,11 @@ const west  = parseFloat(p.get('west')  ?? '-0.13');
 const south = parseFloat(p.get('south') ?? '51.50');
 const east  = parseFloat(p.get('east')  ?? '-0.11');
 const north = parseFloat(p.get('north') ?? '51.52');
-const stlUrl  = p.get('stl');
-const styleName = p.get('style') ?? 'osm_default';
+const styleName     = p.get('style') ?? 'osm_default';
+const stlBuildings  = p.get('stl_buildings');
+const stlLand       = p.get('stl_land');
+const stlWater      = p.get('stl_water');
+const hasPrintParts = !!(stlBuildings && stlLand && stlWater);
 
 if (stlUrl) {
   const dl = document.getElementById('btn-stl');
@@ -398,6 +407,85 @@ setStatus('');
 statsEl.textContent = `${nBuildings} buildings · ${nRoads} roads`;
 document.getElementById('loading').style.display = 'none';
 setLoad('Done', 100);
+
+// ── Print preview mode (load actual STL parts) ────────────────────────────────
+if (hasPrintParts) {
+  document.getElementById('btn-mode').style.display = 'block';
+  document.getElementById('stl-links').style.display = 'block';
+  document.getElementById('dl-buildings').href = stlBuildings;
+  document.getElementById('dl-land').href      = stlLand;
+  document.getElementById('dl-water').href     = stlWater;
+}
+
+// STL print parts — loaded on demand, hidden by default
+const printGroup = new THREE.Group();
+printGroup.visible = false;
+scene.add(printGroup);
+
+const PRINT_SOLID  = { buildings: 0xc8c0b8, land: 0x7ab87a, water: 0x4488cc };
+const PRINT_WIRE   = { buildings: 0x00ffff, land: 0x00ff66, water: 0x00aaff };
+
+let printLoaded = false;
+let showingPrint = false;
+
+async function loadPrintParts() {
+  if (printLoaded) return;
+  setStatus('Loading print model…');
+  const loader = new STLLoader();
+  const parts = [
+    { url: stlBuildings, key: 'buildings' },
+    { url: stlLand,      key: 'land' },
+    { url: stlWater,     key: 'water' },
+  ];
+  for (const { url, key } of parts) {
+    await new Promise((resolve, reject) => {
+      loader.load(url, (geo) => {
+        geo.computeVertexNormals();
+        geo.center();
+        geo.rotateX(-Math.PI / 2);
+        geo.computeBoundingBox();
+        const box = geo.boundingBox;
+        const mat = new THREE.MeshStandardMaterial({
+          color: PRINT_SOLID[key], roughness: 0.7, metalness: 0.05,
+        });
+        mat._solidColor = PRINT_SOLID[key];
+        mat._wireColor  = PRINT_WIRE[key];
+        allMats.push(mat);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.y = -box.min.y;
+        mesh.castShadow = mesh.receiveShadow = true;
+        printGroup.add(mesh);
+        resolve(null);
+      }, undefined, reject);
+    }).catch(() => {});
+  }
+  printLoaded = true;
+  setStatus('');
+}
+
+document.getElementById('btn-mode')?.addEventListener('click', async function() {
+  if (!showingPrint) {
+    await loadPrintParts();
+    showingPrint = true;
+    // Hide OSM scene objects (everything not in printGroup or grid/ground)
+    scene.traverse(obj => {
+      if (obj !== scene && !printGroup.getObjectById(obj.id) &&
+          obj !== grid && obj !== ground &&
+          obj !== printGroup && !(obj instanceof THREE.Light)) {
+        obj.visible = false;
+      }
+    });
+    printGroup.visible = true;
+    this.textContent = '🌍 Map View';
+    this.classList.add('on');
+  } else {
+    showingPrint = false;
+    printGroup.visible = false;
+    scene.traverse(obj => { obj.visible = true; });
+    this.textContent = '🖨 Print Preview';
+    this.classList.remove('on');
+  }
+});
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 let wireframe = false;

@@ -548,11 +548,13 @@ async function generate(): Promise<void> {
     view3dBtn.onclick = () => {
       const b = rotSelAabb(confirmed!);
       const p = new URLSearchParams({
-        west: String(b.west), south: String(b.south),
-        east: String(b.east), north: String(b.north),
-        stl: stlResult.stl_url,
+        west:  String(b.west),  south: String(b.south),
+        east:  String(b.east),  north: String(b.north),
         style: mapStyle,
       });
+      if (stlResult.stl_buildings_url) p.set('stl_buildings', stlResult.stl_buildings_url);
+      if (stlResult.stl_land_url)      p.set('stl_land',      stlResult.stl_land_url);
+      if (stlResult.stl_water_url)     p.set('stl_water',     stlResult.stl_water_url);
       window.open(`/3d-viewer.html?${p}`, '_blank');
     };
 
