@@ -82,11 +82,7 @@ const stlLand       = p.get('stl_land');
 const stlWater      = p.get('stl_water');
 const hasPrintParts = !!(stlBuildings && stlLand && stlWater);
 
-if (stlUrl) {
-  const dl = document.getElementById('btn-stl');
-  dl.style.display = 'block';
-  dl.href = stlUrl;
-}
+// stl_buildings/land/water links wired up below after hasPrintParts check
 
 // ── Projection (lon/lat → metres, XZ plane) ───────────────────────────────────
 const cx     = (east + west)  / 2;
