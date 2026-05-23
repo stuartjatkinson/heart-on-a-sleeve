@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Heart on a Sleeve — SVG Preview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #111117; }
+
+    #viewport {
+      width: 100%; height: 100%;
+      position: relative; overflow: hidden;
+      cursor: grab;
+    }
+    #viewport.dragging { cursor: grabbing; }
+
+    #svg-wrap {
+      position: absolute;
+      top: 0; left: 0;
+      transform-origin: 0 0;
+    }
+    #svg-wrap svg, #svg-wrap img {
+      display: block;
+    }
+
+    #overlay {
+      position: fixed; top: 20px; left: 20px;
+      background: rgba(12,12,18,0.93); border: 1px solid #2a2a36;
+      border-radius: 10px; padding: 14px 16px; backdrop-filter: blur(8px);
+      font-family: system-ui, sans-serif; font-size: 12px; color: #888;
+      z-index: 100; min-width: 170px;
+    }
+    #overlay h2 { font-size: 13px; color: #fff; font-weight: 600; margin-bottom: 10px; }
+    #scale-display { font-size: 11px; color: #555; margin-bottom: 6px; }
+    #svg-size { font-size: 10px; color: #444; margin-bottom: 6px; }
+    .btn {
+      display: block; width: 100%; margin-top: 7px; padding: 7px;
+      background: transparent; border: 1px solid #2a2a36; border-radius: 6px;
+      color: #666; font-size: 11px; cursor: pointer; text-align: center;
+      transition: all 0.12s; text-decoration: none;
+    }
+    .btn:hover { border-color: #4a9eff; color: #4a9eff; }
+
+    #loading {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: #111117; font-family: system-ui; font-size: 13px; color: #555; z-index: 200;
+    }
+    #hint {
+      font-size: 10px; color: #333; margin-top: 8px; line-height: 1.9;
+      border-top: 1px solid #1e1e28; padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+<div id="loading">Loading SVG…</div>
+
+<div id="viewport">
+  <div id="svg-wrap"></div>
+</div>
+
+<div id="overlay">
+  <h2>SVG Preview</h2>
+  <div id="svg-size"></div>
+  <div id="scale-display">—</div>
+  <button class="btn" id="btn-fit">⊡ Fit to window</button>
+  <button class="btn" id="btn-100">⊙ Actual size</button>
+  <a class="btn" id="btn-dl" download="design.svg">↓ Download</a>
+  <button class="btn" onclick="window.close()">✕ Close</button>
+  <div id="hint">Scroll — zoom<br>Left drag — pan</div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const svgUrl = params.get('svg');
+if (!svgUrl) { document.getElementById('loading').textContent = 'No SVG URL.'; throw 0; }
+
+document.getElementById('btn-dl').href = svgUrl;
+
+const viewport  = document.getElementById('viewport');
+const wrap      = document.getElementById('svg-wrap');
+const scaleDisp = document.getElementById('scale-display');
+
+let tx = 0, ty = 0, scale = 1;
+let natW = 0, natH = 0;
+
+function applyTransform() {
+  wrap.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+  scaleDisp.textContent = Math.round(scale * 100) + '%';
+}
+
+function fitToWindow() {
+  if (!natW || !natH) return;
+  const vw = viewport.clientWidth;
+  const vh = viewport.clientHeight;
+  const margin = 40;
+  scale = Math.min((vw - margin*2) / natW, (vh - margin*2) / natH);
+  tx = (vw - natW * scale) / 2;
+  ty = (vh - natH * scale) / 2;
+  applyTransform();
+}
+
+function actualSize() {
+  scale = 1;
+  tx = (viewport.clientWidth  - natW) / 2;
+  ty = (viewport.clientHeight - natH) / 2;
+  applyTransform();
+}
+
+// Fetch SVG as text so we can read viewBox dimensions reliably
+fetch(svgUrl)
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+  .then(svgText => {
+    const parser = new DOMParser();
+    const doc    = parser.parseFromString(svgText, 'image/svg+xml');
+    const svgEl  = doc.documentElement;
+
+    // Extract dimensions — prefer explicit width/height, fall back to viewBox
+    natW = parseFloat(svgEl.getAttribute('width')  || '0');
+    natH = parseFloat(svgEl.getAttribute('height') || '0');
+    const vb = svgEl.getAttribute('viewBox');
+    if (vb) {
+      const parts = vb.trim().split(/[\s,]+/).map(Number);
+      if (parts.length >= 4) {
+        if (!natW) natW = parts[2];
+        if (!natH) natH = parts[3];
+      }
+    }
+
+    if (!natW || !natH) {
+      // Last resort: insert and measure
+      natW = 1000; natH = 1000;
+    }
+
+    // Ensure the SVG renders at its natural size
+    svgEl.setAttribute('width',  natW);
+    svgEl.setAttribute('height', natH);
+    wrap.appendChild(svgEl);
+
+    document.getElementById('svg-size').textContent =
+      `${Math.round(natW)} × ${Math.round(natH)} px`;
+
+    fitToWindow();
+    document.getElementById('loading').style.display = 'none';
+  })
+  .catch(err => {
+    document.getElementById('loading').textContent = `Error: ${err.message}`;
+  });
+
+// Zoom
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const rect = viewport.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  tx = mx - (mx - tx) * factor;
+  ty = my - (my - ty) * factor;
+  scale = Math.max(0.01, Math.min(scale * factor, 40));
+  applyTransform();
+}, { passive: false });
+
+// Pan
+let dragging = false, lx = 0, ly = 0;
+viewport.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  dragging = true; lx = e.clientX; ly = e.clientY;
+  viewport.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  tx += e.clientX - lx; ty += e.clientY - ly;
+  lx = e.clientX; ly = e.clientY;
+  applyTransform();
+});
+window.addEventListener('mouseup', () => { dragging = false; viewport.classList.remove('dragging'); });
+
+document.getElementById('btn-fit').addEventListener('click', fitToWindow);
+document.getElementById('btn-100').addEventListener('click', actualSize);
+window.addEventListener('resize', fitToWindow);
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+# Database
+  database:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: heart_on_a_sleeve
+      POSTGRES_USER: heart_user
+      POSTGRES_PASSWORD: heart_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/init/02-schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U heart_user -d heart_on_a_sleeve"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: stuart@stuartjatkinson.co.uk
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://heart_user:heart_password@database:5432/heart_on_a_sleeve
+      OVERPASS_ENDPOINT: https://overpass.kumi.systems/api/interpreter
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8080
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    depends_on:
+      database:
+        condition: service_healthy
+
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend/cesium:/usr/share/nginx/html:ro
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
