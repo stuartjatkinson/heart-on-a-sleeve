@@ -67,6 +67,7 @@ class STLGenerationRequest(BaseModel):
     gap_close_mm:    float = 0.8   # merge buildings with gap < this
     water_expand_mm: float = 0.5   # expand water bodies by this amount
     min_bldg_mm:     float = 1.0   # minimum building height
+    collar_mm:       float = 1.0   # outer collar width on base + lid
     # Legacy (ignored — kept for backward compat with old callers)
     height_mm: float = 4.0
     base_thickness_mm: float = 2.0

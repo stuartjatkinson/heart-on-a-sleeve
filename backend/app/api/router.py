@@ -130,6 +130,7 @@ async def generate_stl(req: STLGenerationRequest):
         gap_close_mm=req.gap_close_mm,
         water_expand_mm=req.water_expand_mm,
         min_bldg_mm=req.min_bldg_mm,
+        collar_mm=req.collar_mm,
     ))
     from datetime import datetime
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")

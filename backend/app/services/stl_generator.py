@@ -81,6 +81,7 @@ class STLGenerator:
         gap_close_mm:    float = GAP_CLOSE_MM,
         water_expand_mm: float = WATER_EXPAND,
         min_bldg_mm:     float = MIN_BLDG_H,
+        collar_mm:       float = 1.0,
         # Legacy compat
         height_mm: float = BLDG_H_DEFAULT,
         base_thickness_mm: float = 2.0,
@@ -108,11 +109,12 @@ class STLGenerator:
 
         topology = merch_type in TOPOLOGY_TYPES
         elev_grid = _fetch_elevation(west, south, east, north) if topology else None
+        self._collar = collar_mm
 
         return self._build(
             ways, way_pts, plate_w, plate_h,
             bldg_height, water_start, water_end, land_start, land_end,
-            gap_close_mm, water_expand_mm, min_bldg_mm,
+            gap_close_mm, water_expand_mm, min_bldg_mm, self._collar,
             topology, elev_grid,
         )
 
@@ -122,7 +124,7 @@ class STLGenerator:
         self, ways, way_pts,
         plate_w, plate_h,
         bldg_h, water_start, water_end, land_start, land_end,
-        gap_close, water_expand, min_bldg,
+        gap_close, water_expand, min_bldg, collar,
         topology, elev_grid,
     ) -> dict[str, BytesIO]:
 
@@ -191,40 +193,60 @@ class STLGenerator:
         # ── 3. Build three pieces ──────────────────────────────────────────────
         return {
             'buildings': _export(self._buildings_piece(
-                bldg_polys, bldg_heights, raw_roads, bldg_h, topology
+                bldg_polys, bldg_heights, raw_roads,
+                bldg_union, road_union, urban_union,
+                plate_w, plate_h, bldg_h, collar, topology
             )),
             'water': _export(self._water_piece(
                 water_union, urban_union, plate_w, plate_h, water_start, water_end
             )),
             'land': _export(self._land_piece(
                 urban_union, water_union, plate_w, plate_h,
-                land_start, land_end, topology, elev_grid
+                land_start, land_end, collar, topology, elev_grid
             )),
         }
 
     # ── Buildings piece ────────────────────────────────────────────────────────
+    # Flat mode: extrudes the MERGED urban union (terraced rows → single cuboid).
+    # Topology mode: individual buildings at proportional heights.
+    # Both modes: outer collar ring = frame walls at bldg_h so water + lid sit inside.
 
     def _buildings_piece(
-        self, bldg_polys, bldg_heights, raw_roads, bldg_h, topology,
+        self, bldg_polys, bldg_heights, raw_roads,
+        bldg_union, road_union, urban_union,
+        plate_w, plate_h, bldg_h, collar, topology,
     ) -> list[trimesh.Trimesh]:
         meshes = []
+        plate_rect = shapely_box(0, 0, plate_w, plate_h)
+        outer_rect = shapely_box(-collar, -collar, plate_w + collar, plate_h + collar)
 
-        # Building pillars
-        for poly, h in zip(bldg_polys, bldg_heights):
-            h = max(h, MIN_BLDG_H)
-            for p in _geom_parts(poly):
-                m = _extrude(p, h)
-                if m: meshes.append(m)
+        # Outer collar walls — frame that water and lid sit inside
+        collar_ring = make_valid(outer_rect.difference(plate_rect))
+        m = _extrude(collar_ring, bldg_h)
+        if m: meshes.append(m)
 
-        # Road pillars — same height as uniform bldg_h (structural)
-        for poly in raw_roads:
-            for p in _geom_parts(make_valid(poly)):
+        if topology:
+            # Individual buildings at proportional heights
+            for poly, h in zip(bldg_polys, bldg_heights):
+                for p in _geom_parts(poly):
+                    m = _extrude(p, h)
+                    if m: meshes.append(m)
+            for poly in raw_roads:
+                for p in _geom_parts(make_valid(poly)):
+                    m = _extrude(p, bldg_h)
+                    if m: meshes.append(m)
+        else:
+            # Flat mode: extrude the fully merged urban union
+            # → terrace rows merge into single cuboids, no hairline gaps
+            for p in _geom_parts(urban_union):
                 m = _extrude(p, bldg_h)
                 if m: meshes.append(m)
 
         return meshes
 
     # ── Water piece ────────────────────────────────────────────────────────────
+    # Thin layer within the plate bounds (inside the collar walls).
+    # Buildings and roads punch through it as holes.
 
     def _water_piece(
         self, water_union, urban_union,
@@ -236,41 +258,53 @@ class STLGenerator:
         water = make_valid(water_union.intersection(plate_rect))
         if not urban_union.is_empty:
             water = make_valid(water.difference(urban_union))
-        thickness = water_end - water_start
+        thickness = max(water_end - water_start, 0.5)
         meshes = []
         for p in _geom_parts(water):
             m = _extrude(p, thickness, z_base=water_start)
             if m: meshes.append(m)
         return meshes
 
+    # ── Land piece (locking lid) ───────────────────────────────────────────────
+    # Same outer footprint as the collar (plate + collar_mm on all sides).
+    # Inner area has holes for building protrusions.
+    # The collar portion of the lid is always solid — creates the outer frame.
+
     def _land_piece(
         self, urban_union, water_union,
         plate_w, plate_h,
-        land_start, land_end,
+        land_start, land_end, collar,
         topology, elev_grid,
     ) -> list[trimesh.Trimesh]:
         plate_rect = shapely_box(0, 0, plate_w, plate_h)
-        land = plate_rect
-        if not urban_union.is_empty:
-            land = make_valid(land.difference(urban_union))
-        if not water_union.is_empty:
-            land = make_valid(land.difference(water_union.intersection(plate_rect)))
+        outer_rect = shapely_box(-collar, -collar, plate_w + collar, plate_h + collar)
 
-        thickness = land_end - land_start
+        # Collar ring — always solid, creates the outer frame of the lid
+        collar_ring = make_valid(outer_rect.difference(plate_rect))
+
+        # Inner land — plate area minus buildings/roads (and water if present)
+        inner = plate_rect
+        if not urban_union.is_empty:
+            inner = make_valid(inner.difference(urban_union))
+        if not water_union.is_empty:
+            inner = make_valid(inner.difference(water_union.intersection(plate_rect)))
+
+        # Combine inner land + collar ring = full lid shape
+        lid_shape = make_valid(inner.union(collar_ring))
+
+        thickness = max(land_end - land_start, 0.5)
 
         if not topology or elev_grid is None:
             meshes = []
-            for p in _geom_parts(land):
+            for p in _geom_parts(lid_shape):
                 m = _extrude(p, thickness, z_base=land_start)
                 if m: meshes.append(m)
             return meshes
         else:
-            return self._terrain_lid(land, elev_grid, plate_w, plate_h, land_start, land_end)
+            return self._terrain_lid(lid_shape, elev_grid, plate_w, plate_h,
+                                     land_start, land_end)
 
-    def _terrain_lid(
-        self, land_shape, elev_grid,
-        plate_w, plate_h, z_bottom, z_top,
-    ) -> list[trimesh.Trimesh]:
+    def _terrain_lid(self, land_shape, elev_grid, plate_w, plate_h, z_bottom, z_top):
         terrain = _build_terrain_mesh(elev_grid, plate_w, plate_h, z_bottom, z_top - z_bottom)
         return [terrain] if terrain else []
 
