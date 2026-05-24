@@ -31,6 +31,7 @@
       DATABASE_URL: postgresql+asyncpg://heart_user:heart_password@database:5432/heart_on_a_sleeve
       OVERPASS_ENDPOINT: https://overpass.kumi.systems/api/interpreter
       CORS_ORIGINS: http://localhost:3000,http://localhost:8080
+      PORT: "8000"
     ports:
       - "8000:8000"
     volumes:

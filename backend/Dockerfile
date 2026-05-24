@@ -13,7 +13,8 @@ RUN mkdir -p /data/svg_output /data/stl_output
 ENV PYTHONPATH=/app
 ENV DATA_DIR=/data
 
-EXPOSE 8000
+EXPOSE 8080
 
-# Run directly (not through main.py) so SIGTERM kills the process correctly
-CMD ["uvicorn", "app.api.router:app", "--host", "0.0.0.0", "--port", "8000"]
+# PORT is injected by Cloud Run (default 8080); fall back to 8000 for local use
+ENV PORT=8080
+CMD ["sh", "-c", "uvicorn app.api.router:app --host 0.0.0.0 --port ${PORT}"]
