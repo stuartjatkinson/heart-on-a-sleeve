@@ -30,28 +30,14 @@
         .merch-btn.active .ratio { color: #3a7acc; }
         .merch-divider { border: none; border-top: 1px solid var(--border-dim); margin: 8px 0 5px; }
 
-        /* Style selector */
-        .style-grid { display: flex; flex-direction: column; gap: 5px; }
-        .style-btn {
-            background: var(--bg-item); border: 1.5px solid var(--border-dim);
-            color: var(--text-mid); padding: 8px 12px; border-radius: 6px;
-            cursor: pointer; font-size: 13px; text-align: left;
-            transition: all 0.12s; font-family: inherit;
+        /* Transition overlay */
+        #transition-overlay {
+            display: none; position: fixed; inset: 0; z-index: 9999;
+            pointer-events: none;
         }
-        .style-btn:hover { border-color: var(--border-item); color: var(--text-high); }
-        .style-btn.active { border-color: var(--accent); color: var(--text-primary); background: var(--accent-soft); }
 
         /* Bbox display */
         #bbox-display { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 6px; line-height: 1.8; }
-
-        /* Draw + secondary buttons */
-        .btn-draw {
-            width: 100%; padding: 9px; background: transparent;
-            color: var(--text-mid); border: 1px solid var(--border-item);
-            border-radius: var(--radius-btn); font-size: 12px; font-family: inherit;
-            cursor: pointer; margin-bottom: 6px; transition: all 0.12s; text-align: center;
-        }
-        .btn-draw:hover { border-color: var(--border-panel); color: var(--text-high); }
 
         .btn-secondary {
             flex: 1; padding: 9px 6px; background: transparent;
@@ -61,53 +47,145 @@
         }
         .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 
-        #output-btns { display: none; gap: 7px; margin-top: 8px; }
         #status { font-size: 11px; color: var(--text-muted); margin-top: 10px; text-align: center; min-height: 16px; }
+
+        /* Place search */
+        #search-wrapper { position: relative; margin-bottom: 14px; }
+        #place-search {
+            width: 100%; box-sizing: border-box;
+            background: var(--bg-item); border: 1.5px solid var(--border-dim);
+            color: var(--text-primary); border-radius: var(--radius-input);
+            padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none;
+        }
+        #place-search:focus { border-color: var(--accent); }
+        #place-search::placeholder { color: var(--text-dim); }
+        #search-results {
+            display: none; position: absolute; top: calc(100% + 3px); left: 0; right: 0;
+            background: var(--bg-panel); border: 1px solid var(--border-panel);
+            border-radius: 6px; padding: 4px 0; list-style: none;
+            z-index: 1001; max-height: 200px; overflow-y: auto;
+        }
+        #search-results li {
+            padding: 7px 10px; font-size: 12px; color: var(--text-mid);
+            cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        #search-results li:hover { background: var(--bg-hover); color: var(--text-high); }
+
+        /* Merch button icons */
+        .merch-icon { display: block; font-size: 18px; margin-bottom: 3px; }
+
+        /* Coaster shape cycle */
+        .coaster-cycle {
+            display: none; align-items: center; justify-content: center;
+            gap: 5px; margin-top: 5px; font-size: 10px; color: var(--text-dim);
+        }
+        .merch-btn.active .coaster-cycle { display: flex; }
+        .cycle-btn {
+            background: transparent; border: 1px solid var(--border-dim);
+            color: var(--text-muted); width: 18px; height: 18px;
+            border-radius: 3px; cursor: pointer; font-size: 13px;
+            padding: 0; line-height: 1; font-family: inherit;
+        }
+        .cycle-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* Mouse controls hint */
+        #map-hint {
+            position: absolute; bottom: 20px; right: 20px; z-index: 100;
+            font-size: 11px; color: var(--text-dim); line-height: 1.9;
+            text-align: right; pointer-events: none;
+        }
+
+        /* ── Inline SVG viewer ── */
+        #svg-view {
+            display: none; position: fixed; inset: 0; z-index: 9998;
+            flex-direction: row; background: var(--bg-base);
+        }
+        #svg-side {
+            width: 272px; flex-shrink: 0; height: 100vh;
+            overflow-y: auto; padding: 18px 14px 24px; box-sizing: border-box;
+        }
+        #svg-vp {
+            flex: 1; position: relative; overflow: hidden;
+            cursor: grab; background: var(--bg-base);
+        }
+        #svg-vp.dragging  { cursor: grabbing; }
+        #svg-vp.tilt-away {
+            transform-origin: center bottom;
+            transition: transform 0.65s cubic-bezier(.4,0,.8,1), opacity 0.55s ease-in;
+            transform: perspective(900px) rotateX(60deg) translateY(30vh) scale(0.85);
+            opacity: 0;
+        }
+        #svg-wrap { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+        #svg-wrap svg, #svg-wrap img { display: block; }
+
+        .colour-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+        .colour-key-label { font-size: 10px; color: var(--text-dim); width: 54px; flex-shrink: 0; }
+        .swatch-row { display: flex; gap: 4px; }
+        .swatch {
+            width: 20px; height: 20px; border-radius: 4px; cursor: pointer;
+            border: 2px solid transparent; box-sizing: border-box; transition: border-color 0.1s;
+        }
+        .swatch:hover  { border-color: var(--border-item); }
+        .swatch.active { border-color: var(--accent); }
+        #svg-regen-status  { font-size: 11px; color: var(--text-mid); min-height: 14px; margin-bottom: 6px; }
+        #svg-scale-display { font-size: 11px; color: var(--text-mid); margin-bottom: 2px; }
+        #svg-size-display  { font-size: 10px; color: var(--text-muted); margin-bottom: 10px; }
+
+        /* Save + user nav */
+        .save-input {
+            width: 100%; box-sizing: border-box; margin-bottom: 6px;
+            background: var(--bg-item); border: 1.5px solid var(--border-dim);
+            color: var(--text-primary); border-radius: var(--radius-input);
+            padding: 7px 9px; font-size: 12px; font-family: inherit; outline: none;
+        }
+        .save-input:focus { border-color: var(--accent); }
+        .save-input::placeholder { color: var(--text-dim); }
+        #svg-save-status { font-size: 11px; color: var(--text-mid); min-height: 14px; margin-top: 4px; }
+        .user-nav-slot { display: flex; flex-direction: column; gap: 4px; }
     </style>
 </head>
 <body>
 
 <div id="cesiumContainer"></div>
+<div id="map-hint">Left drag — pan<br>Right drag — zoom<br>Middle drag — tilt<br>Scroll — zoom</div>
 
 <div id="panel" class="panel">
     <h2>Heart on a Sleeve</h2>
 
-    <div class="section">
-        <h3>1. Select Area</h3>
-        <button class="btn-draw" id="draw-btn">🎯 Draw Selection</button>
-        <div id="bbox-display">No area selected</div>
+    <div id="search-wrapper">
+        <input id="place-search" type="text" placeholder="🔍 Search place…" autocomplete="off" spellcheck="false">
+        <ul id="search-results"></ul>
     </div>
 
     <div class="section">
-        <h3>2. Merch Type</h3>
+        <h3>Merch Type</h3>
         <div class="section-label">Fabrics &amp; Transfers</div>
         <div class="merch-grid">
-            <div class="merch-btn active" data-type="tshirt">T-Shirt<div class="ratio">3:4</div></div>
-            <div class="merch-btn" data-type="mug">Mug<div class="ratio">9:3</div></div>
-            <div class="merch-btn" data-type="tote">Tote Bag<div class="ratio">2:3</div></div>
+            <div class="merch-btn active" data-type="tshirt"><span class="merch-icon">👕</span>T-Shirt<div class="ratio">3:4</div></div>
+            <div class="merch-btn" data-type="mug"><span class="merch-icon">☕</span>Mug<div class="ratio">9:3</div></div>
+            <div class="merch-btn" data-type="tote"><span class="merch-icon">👜</span>Tote Bag<div class="ratio">2:3</div></div>
         </div>
         <hr class="merch-divider">
         <div class="section-label">3D Prints</div>
         <div class="merch-grid">
-            <div class="merch-btn" data-type="coaster">Coaster<div class="ratio">1:1</div></div>
-            <div class="merch-btn" data-type="placemat">Placemat<div class="ratio">14:10</div></div>
-            <div class="merch-btn" data-type="3d_print">Relief<div class="ratio">1:1</div></div>
+            <div class="merch-btn" data-type="coaster">
+                <span class="merch-icon" id="coaster-icon">⬜</span>
+                Coaster
+                <div class="ratio">1:1</div>
+                <div class="coaster-cycle">
+                    <button class="cycle-btn" id="coaster-prev">‹</button>
+                    <span id="coaster-shape-label">Square</span>
+                    <button class="cycle-btn" id="coaster-next">›</button>
+                </div>
+            </div>
+            <div class="merch-btn" data-type="placemat"><span class="merch-icon">🟫</span>Placemat<div class="ratio">14:10</div></div>
+            <div class="merch-btn" data-type="3d_print"><span class="merch-icon">⛰</span>Relief<div class="ratio">1:1</div></div>
         </div>
     </div>
 
     <div class="section">
-        <h3>3. Map Style</h3>
-        <div class="style-grid">
-            <div class="style-btn active" data-style="osm_default">🗺 OSM Default</div>
-            <div class="style-btn" data-style="minimalist">◻ Minimalist</div>
-            <div class="style-btn" data-style="vibrant">🎨 Vibrant</div>
-        </div>
-    </div>
-
-    <div class="section">
-        <h3>4. Include</h3>
-        <div class="toggle-row"><span>Place labels</span><div class="toggle on" id="tog-labels"></div></div>
-        <div class="toggle-row"><span>Buildings</span><div class="toggle on" id="tog-buildings"></div></div>
+        <h3>Select Area</h3>
+        <div id="bbox-display">Click a product above to start drawing</div>
     </div>
 
     <button class="btn-primary" id="generate-btn" disabled>
@@ -115,12 +193,50 @@
         <span id="btn-text">Generate Design</span>
     </button>
 
-    <div id="output-btns">
-        <button class="btn-secondary" id="view-2d-btn">View SVG</button>
-        <button class="btn-secondary" id="view-3d-btn">View 3D</button>
-    </div>
-
     <div id="status"></div>
+    <div class="divider"></div>
+    <div class="user-nav-slot" data-slot="map"></div>
+</div>
+
+<canvas id="transition-overlay"></canvas>
+
+<!-- ── Inline SVG viewer (shown after generate, no page navigation) ── -->
+<div id="svg-view">
+    <div id="svg-side" class="panel">
+        <button class="btn" id="btn-back">← Map</button>
+        <h2>SVG Preview</h2>
+        <div id="svg-regen-status"></div>
+        <div id="svg-scale-display">—</div>
+        <div id="svg-size-display"></div>
+
+        <div class="section">
+            <h3>Map Colours</h3>
+            <div id="svg-colour-picker"></div>
+        </div>
+
+        <div class="section">
+            <h3>Include</h3>
+            <div class="toggle-row"><span>Place labels</span><div class="toggle on" id="svg-tog-labels"></div></div>
+            <div class="toggle-row"><span>Buildings</span>   <div class="toggle on" id="svg-tog-buildings"></div></div>
+        </div>
+
+        <div class="divider"></div>
+        <button class="btn" id="svg-btn-fit">⊡ Fit to window</button>
+        <button class="btn" id="svg-btn-100">⊙ Actual size</button>
+        <a   class="btn" id="svg-btn-dl" download="design.svg">↓ Download SVG</a>
+        <button class="btn" id="svg-btn-3d">◉ View 3D →</button>
+        <div class="divider"></div>
+        <input type="text" class="save-input" id="svg-save-name" placeholder="Design name…">
+        <button class="btn" id="svg-btn-save">💾 Save design</button>
+        <div id="svg-save-status"></div>
+        <div class="divider"></div>
+        <div class="user-nav-slot" data-slot="svg"></div>
+        <div class="divider"></div>
+        <div class="hint">Scroll — zoom<br>Left drag — pan</div>
+    </div>
+    <div id="svg-vp">
+        <div id="svg-wrap"></div>
+    </div>
 </div>
 
 <script type="module" src="/src/app.ts"></script>

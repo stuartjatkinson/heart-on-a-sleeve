@@ -1,0 +1,54 @@
+services:
+  database:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-heart_on_a_sleeve}
+      POSTGRES_USER: ${POSTGRES_USER:-heart_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/init/02-schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-heart_user} -d ${POSTGRES_DB:-heart_on_a_sleeve}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-heart_user}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-heart_on_a_sleeve}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://heart.stuartjatkinson.co.uk}
+      OVERPASS_ENDPOINT: ${OVERPASS_ENDPOINT:-https://overpass.kumi.systems/api/interpreter}
+    volumes:
+      - ./data:/data
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:

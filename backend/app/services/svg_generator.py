@@ -3,6 +3,17 @@ import svgwrite
 from io import BytesIO, StringIO
 
 
+def _hex_svg_points(w: float, h: float, inset: float = 0.01) -> list[tuple[float, float]]:
+    """Six vertices of a pointy-top regular hexagon in SVG coordinates (Y-down)."""
+    cx, cy = w / 2, h / 2
+    r = min(w, h) / 2 * (1 - inset)
+    return [
+        (round(cx + r * math.cos(math.pi / 2 + i * math.pi / 3), 2),
+         round(cy - r * math.sin(math.pi / 2 + i * math.pi / 3), 2))
+        for i in range(6)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Road classification
 # ---------------------------------------------------------------------------
@@ -147,6 +158,8 @@ class SVGGenerator:
         include_roads: bool = True,
         include_parks: bool = True,
         bbox: tuple[float, float, float, float] | None = None,
+        coaster_shape: str = 'square',
+        palette_overrides: dict | None = None,
     ) -> BytesIO:
         self._parse_elements(osm_data.get('elements', []))
 
@@ -155,7 +168,9 @@ class SVGGenerator:
         self._svg_h = spec['height_px']
         self._bbox  = bbox or self._bbox_from_nodes()
 
-        palette = STYLES.get(style, STYLES['osm_default'])
+        palette = dict(STYLES.get(style, STYLES['osm_default']))
+        if palette_overrides:
+            palette.update(palette_overrides)
 
         svg = svgwrite.Drawing(size=(str(self._svg_w), str(self._svg_h)))
 
@@ -163,11 +178,15 @@ class SVGGenerator:
         svg.add(svg.rect(insert=(0, 0), size=(self._svg_w, self._svg_h),
                          fill=palette['background']))
 
-        # Hard clip — everything outside the canvas boundary is cut off.
-        # Draw methods use svg (Drawing) to CREATE elements but self._g (Group) to ADD them,
-        # because svgwrite Group objects don't expose element factory methods.
+        # Hard clip — shape depends on merch type and coaster_shape setting.
         clip = svg.defs.add(svg.clipPath(id='map-clip'))
-        clip.add(svg.rect(insert=(0, 0), size=(self._svg_w, self._svg_h)))
+        if merch_type == 'coaster' and coaster_shape == 'circle':
+            r = min(self._svg_w, self._svg_h) / 2
+            clip.add(svg.circle(center=(self._svg_w / 2, self._svg_h / 2), r=r))
+        elif merch_type == 'coaster' and coaster_shape == 'hexagon':
+            clip.add(svg.polygon(points=_hex_svg_points(self._svg_w, self._svg_h)))
+        else:
+            clip.add(svg.rect(insert=(0, 0), size=(self._svg_w, self._svg_h)))
         self._g = svg.add(svg.g(clip_path='url(#map-clip)'))
 
         # Draw order: land → water → buildings → roads → railways → labels

@@ -95,16 +95,16 @@ Three interlocking pieces per print:
 - [x] Rotation in geographic space (correct cos(lat) scaling)
 - [x] Globe controls: rotate=disabled during draw, scroll-zoom + middle-tilt always on
 - [x] Merch panel split: Fabrics & Transfers (3 col) / 3D Prints (3 col)
-- [x] Style selector: OSM Default / Minimalist / Vibrant
-- [x] Include toggles: Place labels, Buildings
-- [x] Generate button with elapsed timer and 90 s abort
-- [x] Post-generate: View SVG + View 3D buttons always shown
+- [x] **Auto-draw on merch click** — clicking any product type immediately enters draw mode (no separate Draw button); re-clicking the active type redraws; clicking a different type while editing just re-ratios the existing selection
+- [x] **Circle + hexagon coaster shapes** — globe polygon renders as circle (64-pt) or hexagon when those coaster shapes are active; all hit-tests and screen AABB use the correct shape
+- [x] **Generate transition** — pixelation phases → fake-asymptotic progress bar (tau from bbox-area estimate) → zoom to SVG-viewer fit bounds → pixel-to-SVG cross-dissolve
 - [x] Camera pitch constraints (20°–90° from horizon)
-- [x] Merch type change re-fits existing bbox (centre-preserved, ratio-adjusted)
+- [x] **Fabric/transfer types** — "View 3D →" hidden; "↓ Download SVG" highlighted as primary action
 - [ ] Preset location dropdown
 - [ ] Scale bar
 - [ ] Geolocation
 - [ ] EPSG:27700 coordinate display
+- [ ] **SSE streaming progress** from SVG/STL generators so transition bar tracks real server progress *(deferred — requires backend chunked-response endpoint)*
 
 ---
 
@@ -130,10 +130,12 @@ Three interlocking pieces per print:
 - [x] **Solid colours**: fixed print-material scheme (grey/blue/green) — not scheme-dependent
 - [x] **Wireframe**: per-type neon colours — parks=green, water=blue, roads=orange/yellow, buildings=cyan/purple/white; black background
 - [x] Grid: light blue solid / bright blue wireframe
-- [x] Load progress bar (fetch → parse → render), building + road count
+- [x] **Floating progress bar** — render loop starts before OSM fetch; `#loading` is a translucent bottom bar; pre-load fake-asymptotic fill (0→50%, tau from bbox area); 3 s minimum pre-load; post-load 5 s wireframe entry drives bar 50→100%; bar hides when animation completes
 - [x] **Print Preview** — loads all 3 STL parts in correct print colours, spatially aligned
 - [x] **⟳ Regenerate STL** panel — 9 tunable parameters, calls API, updates downloads + Print Preview in-place
 - [x] STL download links for all 3 parts
+- [x] **Fabric Preview** — SVG as `TextureLoader` ground plane + buildings-only OSM; hides roads/water/parks (SVG covers them)
+- [x] **Layered print animation** — buildings wireframe fade-in → solid fill; water plate descends from above; land lid descends from above; ease-out cubic on descent phases
 - [ ] Terrain elevation in live render (SRTM)
 - [ ] Roof shapes
 - [ ] Street-level textures
@@ -149,14 +151,32 @@ Three interlocking pieces per print:
 
 ---
 
-## Phase 6 — SVG Editor App 📋 Planned
+## Phase 5e — Client-side SVG Renderer ✅ Done
 
-- [ ] Load generated SVG into an editable panel
-- [ ] Layer toggles per OSM category
-- [ ] Per-layer colour picker and opacity slider
-- [ ] Road width, label size, saturation sliders
-- [ ] Reset to style preset
-- [ ] Re-render at 300 DPI and download
+Moved SVG generation from the Python backend to the browser for Cloud Run scalability:
+
+- [x] `frontend/cesium/src/svg-renderer.ts` — full TypeScript port of Python `svg_generator.py`
+  - All three style presets (osm_default, minimalist, vibrant) with identical colour palettes
+  - cosLat projection exactly matching backend formula
+  - Same draw order: landuse → water → buildings → roads → railways → labels → attribution
+  - Clip-path support (square/circle/hexagon for coasters)
+- [x] `generate()` in `app.ts` — fetches `/api/osm/features` then calls `renderSvg()` client-side; no `/api/generate/svg` call
+- [x] `svgRegen()` — uses cached OSM data (`_cachedOsmData`), re-renders with new palette/toggles at ~0 ms (no API call)
+- [x] `POST /api/save-svg` — backend endpoint to persist client-rendered SVG text to `/output/svg_output/` for dashboard thumbnails
+- [x] `saveProject()` — POSTs SVG text to `/api/save-svg` before saving project (blob: URL → stable /output/ URL)
+- [x] Backend `/api/generate/svg` still available for server-side use (PDF export, server batch)
+
+**Why:** Python GIL limits SVG parallelism to ~2 concurrent generations per Cloud Run instance. With client-side rendering, the backend only handles I/O-bound Overpass proxy calls — zero CPU per generation, trivially scales to hundreds of concurrent users.
+
+---
+
+## Phase 6 — SVG Editor App ✅ Done
+
+- [x] Load generated SVG into an editable panel (pan/zoom viewport + side panel)
+- [x] Layer toggles — Buildings + Place Labels (intentionally scoped; roads/parks always included)
+- [x] Per-layer colour picker — 6 categories × 6 swatches, live regeneration
+- [x] Re-render at 300 DPI — all merch types auto-generate at print resolution (300 DPI)
+- [x] Download SVG button
 
 ---
 
@@ -178,23 +198,31 @@ Three interlocking pieces per print:
 
 ---
 
-## Phase 9 — User Auth & Dashboard 📋 Planned
+## Phase 9 — User Auth & Dashboard ✅ Done
 
-- [ ] JWT auth
-- [ ] Save/reload design projects
-- [ ] Order history + re-order
-- [ ] Share design (public view-only link)
+- [x] JWT auth — register + login endpoints, bcrypt passwords, access/refresh tokens (30 min / 7 day)
+- [x] Save design projects — POST /api/projects stores bbox, merch type, SVG/STL URLs, palette, toggles
+- [x] List + delete saved projects — GET/DELETE /api/projects with user ownership check
+- [x] Login/register page — `/login.html` with tab toggle, localStorage token storage
+- [x] Dashboard — `/dashboard.html` grid of saved projects with thumbnail, open + delete
+- [x] Save button in SVG viewer (both inline and standalone) — prompts login if unauthenticated
+- [x] User nav (Login / My Designs / Logout) in all SVG panels
+- [ ] Order history + re-order *(deferred to Phase 7/8)*
+- [ ] Share design (public view-only link) *(future)*
 
 ---
 
-## Phase 10 — Deployment 📋 Planned
+## Phase 10 — Deployment 🔄 In Progress
 
-- [ ] `backend/Dockerfile` (Python 3.14, multi-stage)
-- [ ] `frontend/Dockerfile` (Nginx + API proxy)
-- [ ] `docker-compose.prod.yml` with Traefik labels
-- [ ] `heart.stuartjatkinson.co.uk` routing
-- [ ] TLS via Cloudflare, rate limiting
-- [ ] GitHub Actions: lint → test → build → push → deploy
+- [x] `backend/Dockerfile` — Python 3.12-slim, thread pool, SIGTERM-safe
+- [x] `frontend/Dockerfile` — node:20-alpine build → nginx:alpine serve
+- [x] `docker-compose.yml` — dev compose (DB + backend + nginx)
+- [x] `docker-compose.prod.yml` — production compose (no pgadmin, env-validated secrets, restart policies)
+- [x] `frontend/nginx.conf` — fixed /api/ proxy, SPA routing
+- [x] GitHub Actions CI — lint-backend (ruff), build-backend image, build-frontend + image
+- [ ] `heart.stuartjatkinson.co.uk` routing + TLS via Cloudflare
+- [ ] GitHub Actions CD — push images to registry → deploy
+- [ ] Rate limiting on Overpass calls
 
 ---
 
@@ -210,8 +238,9 @@ Three interlocking pieces per print:
 | 5b. SVG Viewer | ✅ Done | Pan/zoom, fit, download |
 | 5c. 3D Map Viewer | ✅ Done | Live OSM render, Print Preview, live regenerate |
 | 5d. Design System | ✅ Done | Unified CSS, variables, shared components |
-| 6. SVG Editor | 📋 Planned | |
+| 5e. Client SVG Renderer | ✅ Done | TS port of svg_generator.py, client-side regen, save-svg endpoint |
+| 6. SVG Editor | ✅ Done | Side panel, colour picker, layer toggles, live regen, 300 DPI output |
 | 7. WooCommerce | 📋 Planned | |
 | 8. POD Providers | 📋 Planned | |
-| 9. Auth + Dashboard | 📋 Planned | |
-| 10. Deployment | 📋 Planned | |
+| 9. Auth + Dashboard | ✅ Done | JWT auth, register/login, save/dashboard, user nav |
+| 10. Deployment | 🔄 In Progress | Docker, prod compose, CI — CD + domain pending |

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Heart on a Sleeve — Login</title>
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    html, body { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    body { background: var(--bg-base); }
+
+    #card {
+      width: 340px; padding: 28px 24px 24px;
+    }
+
+    h2 { margin: 0 0 4px; }
+    .subtitle { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
+
+    .tab-row { display: flex; gap: 6px; margin-bottom: 18px; }
+    .tab {
+      flex: 1; padding: 7px; background: var(--bg-item);
+      border: 1.5px solid var(--border-dim); border-radius: var(--radius-btn);
+      color: var(--text-mid); font-size: 13px; font-family: inherit;
+      cursor: pointer; transition: all 0.12s; text-align: center;
+    }
+    .tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+    .field { margin-bottom: 12px; }
+    label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+    input[type=email], input[type=password] {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg-item); border: 1.5px solid var(--border-dim);
+      color: var(--text-primary); border-radius: var(--radius-input);
+      padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--text-dim); }
+
+    #error { font-size: 12px; color: #e06060; min-height: 16px; margin-bottom: 8px; }
+
+    #back-link { display: block; text-align: center; margin-top: 14px; font-size: 12px; color: var(--text-dim); text-decoration: none; }
+    #back-link:hover { color: var(--text-mid); }
+  </style>
+</head>
+<body>
+<div id="card" class="panel">
+  <h2>Heart on a Sleeve</h2>
+  <p class="subtitle">Sign in to save and manage your designs</p>
+
+  <div class="tab-row">
+    <button class="tab active" id="tab-login">Login</button>
+    <button class="tab"        id="tab-register">Register</button>
+  </div>
+
+  <div class="field">
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
+  </div>
+  <div class="field">
+    <label>Password</label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+  </div>
+
+  <div id="error"></div>
+  <button class="btn-primary" id="submit-btn">Login</button>
+  <a href="/" id="back-link">← Back to map</a>
+</div>
+
+<script>
+const params   = new URLSearchParams(location.search);
+const returnTo = params.get('returnTo') || '/';
+let mode = 'login';
+
+document.getElementById('tab-login').addEventListener('click', () => setMode('login'));
+document.getElementById('tab-register').addEventListener('click', () => setMode('register'));
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('tab-login').classList.toggle('active', m === 'login');
+  document.getElementById('tab-register').classList.toggle('active', m === 'register');
+  document.getElementById('submit-btn').textContent = m === 'login' ? 'Login' : 'Create account';
+  document.getElementById('error').textContent = '';
+  document.getElementById('password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+}
+
+document.getElementById('submit-btn').addEventListener('click', submit);
+document.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+
+async function submit() {
+  const email    = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errorEl  = document.getElementById('error');
+  const btn      = document.getElementById('submit-btn');
+
+  if (!email || !password) { errorEl.textContent = 'Email and password required.'; return; }
+
+  btn.disabled = true;
+  btn.textContent = mode === 'login' ? 'Logging in…' : 'Creating account…';
+  errorEl.textContent = '';
+
+  try {
+    const resp = await fetch(`/api/auth/${mode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { throw new Error(data.detail || `Server ${resp.status}`); }
+    localStorage.setItem('hoas_token', data.access_token);
+    localStorage.setItem('hoas_refresh', data.refresh_token);
+    localStorage.setItem('hoas_email', data.email);
+    window.location.href = returnTo;
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false;
+    btn.textContent = mode === 'login' ? 'Login' : 'Create account';
+  }
+}
+</script>
+</body>
+</html>

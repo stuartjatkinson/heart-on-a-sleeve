@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
+import { renderSvg, svgToString, svgToBlobUrl, SVG_SPECS } from './svg-renderer';
 
 Cesium.Ion.defaultAccessToken = '';
 
@@ -14,6 +15,7 @@ const viewer = new Cesium.Viewer('cesiumContainer', {
   navigationHelpButton: false as unknown as boolean, animation: false as unknown as boolean,
   timeline: false as unknown as boolean, fullscreenButton: false as unknown as boolean,
   selectionIndicator: false as unknown as boolean, infoBox: false as unknown as boolean,
+  contextOptions: { webgl: { preserveDrawingBuffer: true } },
 } as unknown as Cesium.Viewer.ConstructorOptions);
 
 viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
@@ -29,21 +31,32 @@ viewer.scene.screenSpaceCameraController.maximumZoomDistance = 20_000_000;
 viewer.scene.screenSpaceCameraController.minimumZoomDistance = 100;
 
 const PITCH_MAX = -(Math.PI * 20) / 180, PITCH_MIN = -Math.PI / 2;
-let _validCam = { position: viewer.camera.position.clone(), heading: viewer.camera.heading, pitch: viewer.camera.pitch };
+let _validCam = { position: viewer.camera.position.clone(), pitch: viewer.camera.pitch };
 viewer.scene.postRender.addEventListener(() => {
   const p = viewer.camera.pitch;
+  const h = viewer.camera.heading;
+  // Lock heading to north — snap back if user rotated the globe
+  if (Math.abs(h) > 1e-4) {
+    viewer.camera.setView({
+      destination: viewer.camera.position.clone(),
+      orientation: { heading: 0, pitch: p, roll: 0 },
+    });
+    return;
+  }
   if (p > PITCH_MAX || p < PITCH_MIN) {
     viewer.camera.setView({ destination: _validCam.position.clone(),
-      orientation: { heading: _validCam.heading, pitch: _validCam.pitch, roll: 0 } });
+      orientation: { heading: 0, pitch: _validCam.pitch, roll: 0 } });
   } else {
-    _validCam = { position: viewer.camera.position.clone(), heading: viewer.camera.heading, pitch: p };
+    _validCam = { position: viewer.camera.position.clone(), pitch: p };
   }
 });
+
+// Wakefield council area — top-down flat start, ~50 km altitude
 viewer.camera.setView({
-  destination: Cesium.Cartesian3.fromDegrees(-1.5, 52.5, 500_000),
-  orientation: { heading: 0, pitch: Cesium.Math.toRadians(-50), roll: 0 },
+  destination: Cesium.Cartesian3.fromDegrees(-1.49, 53.68, 50_000),
+  orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
 });
-_validCam = { position: viewer.camera.position.clone(), heading: viewer.camera.heading, pitch: viewer.camera.pitch };
+_validCam = { position: viewer.camera.position.clone(), pitch: viewer.camera.pitch };
 
 // ---------------------------------------------------------------------------
 // Selection state — rotated rectangle stored as centre + half-dims + angle
@@ -62,8 +75,15 @@ const MERCH_RATIO: Record<string, number> = {
 let confirmed: RotSel | null = null;
 let _live: RotSel | null = null;
 let editState: 'idle' | 'drawing' | 'editing' = 'idle';
-let merchType = 'tshirt', mapStyle = 'osm_default';
-let includes = { labels: true, buildings: true };
+let merchType = 'tshirt';
+
+// Coaster shape cycling
+const COASTER_SHAPES = ['square', 'circle', 'hexagon'] as const;
+type CoasterShape = typeof COASTER_SHAPES[number];
+const COASTER_ICONS: Record<CoasterShape, string>  = { square: '⬜', circle: '⬤', hexagon: '⬡' };
+const COASTER_LABELS: Record<CoasterShape, string> = { square: 'Square', circle: 'Circle', hexagon: 'Hexagon' };
+let coasterShapeIdx = 0;
+let coasterShape: CoasterShape = 'square';
 
 // ---------------------------------------------------------------------------
 // RotSel geometry
@@ -78,6 +98,32 @@ function rotSelCorners(s: RotSel): { lon: number; lat: number }[] {
       const ry = ix * sa + iy * ca;
       return { lon: s.cx + rx / cosL, lat: s.cy + ry }; // back to deg
     });
+}
+
+function selCirclePoints(s: RotSel, n = 64): { lon: number; lat: number }[] {
+  const cosL = Math.cos(s.cy * Math.PI / 180);
+  const r = s.hh;
+  return Array.from({ length: n }, (_, i) => {
+    const a = s.rot + (Math.PI * 2 * i) / n;
+    return { lon: s.cx + Math.sin(a) * r / cosL, lat: s.cy + Math.cos(a) * r };
+  });
+}
+
+function selHexagonPoints(s: RotSel): { lon: number; lat: number }[] {
+  const cosL = Math.cos(s.cy * Math.PI / 180);
+  const r = s.hh;
+  return Array.from({ length: 6 }, (_, i) => {
+    const a = s.rot + (Math.PI * 2 * i) / 6 + Math.PI / 6;
+    return { lon: s.cx + Math.sin(a) * r / cosL, lat: s.cy + Math.cos(a) * r };
+  });
+}
+
+function selShapePoints(s: RotSel): { lon: number; lat: number }[] {
+  if (merchType === 'coaster') {
+    if (coasterShape === 'circle')  return selCirclePoints(s);
+    if (coasterShape === 'hexagon') return selHexagonPoints(s);
+  }
+  return rotSelCorners(s);
 }
 
 function rotSelAabb(s: RotSel): BBox {
@@ -119,7 +165,7 @@ const selEntity = viewer.entities.add({
   polygon: {
     hierarchy: new Cesium.CallbackProperty(() => {
       if (!_live) return null;
-      const positions = rotSelCorners(_live).map(c => Cesium.Cartesian3.fromDegrees(c.lon, c.lat));
+      const positions = selShapePoints(_live).map(c => Cesium.Cartesian3.fromDegrees(c.lon, c.lat));
       return new Cesium.PolygonHierarchy(positions);
     }, false),
     material: Cesium.Color.fromCssColorString('#4a9eff').withAlpha(0.15),
@@ -128,7 +174,7 @@ const selEntity = viewer.entities.add({
   polyline: {
     positions: new Cesium.CallbackProperty(() => {
       if (!_live) return [];
-      const c = rotSelCorners(_live);
+      const c = selShapePoints(_live);
       return [...c, c[0]].map(p => Cesium.Cartesian3.fromDegrees(p.lon, p.lat));
     }, false),
     width: 2,
@@ -245,8 +291,7 @@ function getZone(screenPos: Cesium.Cartesian2): HoverZone {
   }
   const w = pickLatLon(screenPos);
   if (w && _live) {
-    const corners = rotSelCorners(_live);
-    if (pointInPolygon(w.lon, w.lat, corners)) return { type: 'inside' };
+    if (pointInPolygon(w.lon, w.lat, selShapePoints(_live))) return { type: 'inside' };
   }
   return { type: 'none' };
 }
@@ -272,7 +317,7 @@ function enterDrawing(): void {
   confirmed = null; _live = null;
   selEntity.show = false; showHandles(false);
   viewer.scene.screenSpaceCameraController.enableRotate = false;
-  setCursor('crosshair'); updateDrawBtn();
+  setCursor('crosshair');
   const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
   genBtn.disabled = true; genBtn.onclick = generate;
   document.getElementById('bbox-display')!.textContent = 'Left-drag on the map to draw your area';
@@ -330,7 +375,7 @@ function enterEditing(s: RotSel): void {
   confirmed = { ...s }; _live = { ...s };
   selEntity.show = true; showHandles(true);
   viewer.scene.screenSpaceCameraController.enableRotate = true;
-  setCursor('default'); updateDrawBtn(); updateBboxDisplay();
+  setCursor('default'); updateBboxDisplay();
   const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
   genBtn.disabled = false; genBtn.onclick = generate;
 
@@ -421,28 +466,6 @@ function exitEditing(): void {
   setCursor('default');
 }
 
-// ---------------------------------------------------------------------------
-// Draw button
-// ---------------------------------------------------------------------------
-function startSelection(): void {
-  if (editState === 'drawing') {
-    clearHandlers(); editState = 'idle';
-    selEntity.show = false; _live = null; updateDrawBtn(); return;
-  }
-  if (editState === 'editing') exitEditing();
-  enterDrawing();
-}
-
-function updateDrawBtn(): void {
-  const btn = document.getElementById('draw-btn')!;
-  if (editState === 'drawing') {
-    btn.textContent = '✕ Cancel'; btn.style.borderColor = '#4a9eff'; btn.style.color = '#4a9eff';
-  } else {
-    btn.textContent = confirmed ? '🎯 Redraw' : '🎯 Draw Selection';
-    btn.style.borderColor = ''; btn.style.color = '';
-  }
-}
-
 function updateBboxDisplay(): void {
   if (!_live) return;
   const b = rotSelAabb(_live);
@@ -456,110 +479,577 @@ function updateBboxDisplay(): void {
 // UI
 // ---------------------------------------------------------------------------
 function selectMerch(el: HTMLElement): void {
+  const newType = el.dataset.type!;
+  const sameType = newType === merchType;
   document.querySelectorAll('.merch-btn').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
-  merchType = el.dataset.type!;
-  if (_live && editState === 'editing') {
-    _live = enforceRatio(_live, MERCH_RATIO[merchType] ?? 1);
+  merchType = newType;
+
+  if (editState === 'editing' && !sameType) {
+    // Different merch: update ratio, keep existing selection
+    _live = enforceRatio(_live!, MERCH_RATIO[merchType] ?? 1);
     confirmed = { ..._live };
     updateBboxDisplay();
+  } else {
+    // No selection, or re-clicking active type: start/restart drawing
+    if (editState === 'editing') exitEditing();
+    else if (editState === 'drawing') { clearHandlers(); editState = 'idle'; }
+    enterDrawing();
   }
 }
 
-function selectStyle(el: HTMLElement): void {
-  document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
-  mapStyle = el.dataset.style!;
+// ---------------------------------------------------------------------------
+// SVG-viewer layout geometry — matches fitToWindow() in svg-viewer.html
+// ---------------------------------------------------------------------------
+const SVG_PANEL_W = 272;
+
+function getSvgViewerFitBounds(
+  W: number, H: number, ratio: number,
+): { x: number; y: number; w: number; h: number } {
+  const vw = W - SVG_PANEL_W, m = 40;
+  let svgW: number, svgH: number;
+  if ((vw - m * 2) / (H - m * 2) > ratio) {
+    svgH = H - m * 2; svgW = svgH * ratio;
+  } else {
+    svgW = vw - m * 2; svgH = svgW / ratio;
+  }
+  return { x: SVG_PANEL_W + (vw - svgW) / 2, y: (H - svgH) / 2, w: svgW, h: svgH };
 }
 
-function toggle(el: HTMLElement): void {
-  el.classList.toggle('on');
-  (includes as any)[el.id.replace('tog-', '')] = el.classList.contains('on');
+function estimateGenMs(bbox: BBox): number {
+  const cosL = Math.cos((bbox.north + bbox.south) / 2 * Math.PI / 180);
+  const km2 = (bbox.east - bbox.west) * cosL * 111.32 * (bbox.north - bbox.south) * 111.32;
+  return Math.min(30_000, 1_000 + km2 * 1_200);
 }
 
 // ---------------------------------------------------------------------------
-// Generate — managed entirely via onclick, no persistent addEventListener
+// Transition animation helpers
 // ---------------------------------------------------------------------------
-const genBtn    = document.getElementById('generate-btn') as HTMLButtonElement;
-const outputDiv = document.getElementById('output-btns') as HTMLElement;
-const view2dBtn = document.getElementById('view-2d-btn') as HTMLButtonElement;
-const view3dBtn = document.getElementById('view-3d-btn') as HTMLButtonElement;
-
-function resetOutputBtns(): void {
-  outputDiv.style.display = 'none';
-  view2dBtn.onclick = null;
-  view3dBtn.onclick = null;
+function loadImg(src: string): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src;
+  });
 }
+
+function animPhase(ms: number, cb: (t: number) => void): Promise<void> {
+  return new Promise(res => {
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - t0) / ms);
+      cb(t);
+      if (t < 1) requestAnimationFrame(tick); else res();
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+function getSelAabb(): { x: number; y: number; w: number; h: number } | null {
+  if (!confirmed) return null;
+  const pts = selShapePoints(confirmed)
+    .map(c => worldToScreen(c.lon, c.lat))
+    .filter((p): p is Cesium.Cartesian2 => !!p);
+  if (pts.length < 3) return null;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+function drawTransFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: HTMLImageElement,
+  W: number, H: number,
+  sel: { x: number; y: number; w: number; h: number } | null,
+  darkAlpha: number, pixelSize: number,
+): void {
+  ctx.drawImage(frame, 0, 0, W, H);
+  if (!sel) return;
+  const { x, y, w, h } = sel;
+  if (pixelSize > 1) {
+    const tmp = document.createElement('canvas');
+    tmp.width  = Math.max(1, Math.round(w / pixelSize));
+    tmp.height = Math.max(1, Math.round(h / pixelSize));
+    const t = tmp.getContext('2d')!;
+    t.drawImage(frame, x, y, w, h, 0, 0, tmp.width, tmp.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, x, y, w, h);
+    ctx.imageSmoothingEnabled = true;
+  }
+  if (darkAlpha > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${darkAlpha})`;
+    ctx.fillRect(0, 0, W, y);
+    ctx.fillRect(0, y, x, h);
+    ctx.fillRect(x + w, y, W - x - w, h);
+    ctx.fillRect(0, y + h, W, H - y - h);
+  }
+}
+
+function drawProgressBar(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, prog: number,
+): void {
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.beginPath();
+  (ctx as any).roundRect?.(x, y, w, h, h / 2) ?? ctx.rect(x, y, w, h);
+  ctx.fill();
+  const fw = Math.max(h, w * Math.min(1, prog));
+  const grad = ctx.createLinearGradient(x, 0, x + fw, 0);
+  grad.addColorStop(0, '#4a9eff');
+  grad.addColorStop(1, '#88c4ff');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  (ctx as any).roundRect?.(x, y, fw, h, h / 2) ?? ctx.rect(x, y, fw, h);
+  ctx.fill();
+}
+
+async function runTransition(
+  svgP: Promise<any>,
+  stlP: Promise<any>,
+  estimatedMs = 6_000,
+): Promise<[any, any]> {
+  const ov  = document.getElementById('transition-overlay') as HTMLCanvasElement;
+  const ctx = ov.getContext('2d')!;
+  const W = window.innerWidth, H = window.innerHeight;
+  ov.width = W; ov.height = H;
+  ov.style.display = 'block';
+
+  let frame: HTMLImageElement | null = null;
+  try {
+    viewer.render();
+    frame = await loadImg((viewer.scene.canvas as HTMLCanvasElement).toDataURL('image/jpeg', 0.85));
+  } catch { /* canvas capture failed */ }
+
+  const sel = getSelAabb();
+
+  if (frame) {
+    // Phase 1: darken outside selection (200 ms)
+    await animPhase(200, t => drawTransFrame(ctx, frame!, W, H, sel, t * 0.78, 0));
+    // Phase 2: pixelate selection (200 ms, block 20→2)
+    await animPhase(200, t => drawTransFrame(ctx, frame!, W, H, sel, 0.78, Math.max(2, Math.round(20 - 18 * t))));
+  } else {
+    ov.style.background = '#000';
+    await animPhase(300, t => { ctx.fillStyle = `rgba(0,0,0,${t * 0.85})`; ctx.fillRect(0, 0, W, H); });
+  }
+
+  // Pre-render pixelated selection into offscreen canvas
+  let pixCanvas: HTMLCanvasElement | null = null;
+  if (frame && sel) {
+    pixCanvas = document.createElement('canvas');
+    pixCanvas.width  = Math.max(1, Math.round(sel.w / 2));
+    pixCanvas.height = Math.max(1, Math.round(sel.h / 2));
+    pixCanvas.getContext('2d')!.drawImage(frame, sel.x, sel.y, sel.w, sel.h, 0, 0, pixCanvas.width, pixCanvas.height);
+  }
+
+  // bothDone fires on both success and error so the loop always exits
+  let bothDone = false;
+  let bothResult: [any, any] | null = null;
+  let bothError: any = null;
+  Promise.all([svgP, stlP])
+    .then(r  => { bothResult = r as [any, any]; })
+    .catch(e => { bothError  = e; })
+    .finally(() => { bothDone = true; });
+
+  // Fit-bounds computed upfront so phase 3 can zoom toward the final position
+  const fitBounds = getSvgViewerFitBounds(W, H, MERCH_RATIO[merchType] ?? 1);
+
+  // Phase 3: pixelated selection zooms toward fitBounds while waiting for data
+  const tau = Math.max(1_000, estimatedMs / 3);
+  const trailStart = performance.now();
+  const BAR_H = 4, BAR_Y = H - 44, BAR_X = Math.round(W * 0.15), BAR_W = Math.round(W * 0.70);
+  let zoomT = 0;
+  await new Promise<void>(resolve => {
+    function loop(now: number) {
+      const elapsed = now - trailStart;
+      zoomT = 0.9 * (1 - Math.exp(-elapsed / tau));
+      ctx.clearRect(0, 0, W, H);
+
+      if (sel && pixCanvas) {
+        const dx = sel.x + (fitBounds.x - sel.x) * zoomT;
+        const dy = sel.y + (fitBounds.y - sel.y) * zoomT;
+        const dw = sel.w + (fitBounds.w - sel.w) * zoomT;
+        const dh = sel.h + (fitBounds.h - sel.h) * zoomT;
+        // Keep the Cesium frame visible + dark vignette that follows the moving selection
+        if (frame) {
+          ctx.drawImage(frame, 0, 0, W, H);
+          ctx.fillStyle = 'rgba(0,0,0,0.78)';
+          ctx.fillRect(0, 0, W, dy);
+          ctx.fillRect(0, dy, dx, dh);
+          ctx.fillRect(dx + dw, dy, W - dx - dw, dh);
+          ctx.fillRect(0, dy + dh, W, H - dy - dh);
+        } else {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, W, H);
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(pixCanvas, dx, dy, dw, dh);
+        ctx.imageSmoothingEnabled = true;
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      drawProgressBar(ctx, BAR_X, BAR_Y, BAR_W, BAR_H, zoomT / 0.9);
+      if (bothDone && elapsed >= 300) { resolve(); return; }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  });
+
+  if (bothError) throw bothError;
+  const [svgResult, stlResult] = bothResult!;
+  const svgImg = await loadImg(svgResult.svg_url);
+
+  // Phase 4: snap remaining gap to exact fitBounds (200 ms)
+  const zoomAtSettle = zoomT;
+  await animPhase(200, t => {
+    const ease = 1 - Math.pow(1 - t, 3);
+    const z = zoomAtSettle + (1 - zoomAtSettle) * ease;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0d0e12';
+    ctx.fillRect(0, 0, W, H);
+    if (sel && pixCanvas) {
+      const dx = sel.x + (fitBounds.x - sel.x) * z;
+      const dy = sel.y + (fitBounds.y - sel.y) * z;
+      const dw = sel.w + (fitBounds.w - sel.w) * z;
+      const dh = sel.h + (fitBounds.h - sel.h) * z;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(pixCanvas, dx, dy, dw, dh);
+      ctx.imageSmoothingEnabled = true;
+    }
+  });
+
+  // Phase 5: cross-dissolve pixelated → SVG at fit bounds (500 ms)
+  await animPhase(500, t => {
+    const ease = 1 - Math.pow(1 - t, 3);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0d0e12';
+    ctx.fillRect(0, 0, W, H);
+    if (pixCanvas) {
+      ctx.globalAlpha = 1 - ease;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(pixCanvas, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = ease;
+    ctx.drawImage(svgImg, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+    ctx.globalAlpha = 1;
+  });
+
+  return [svgResult, stlResult];
+}
+
+// ---------------------------------------------------------------------------
+// Inline SVG viewer
+// ---------------------------------------------------------------------------
+const SVG_COLOUR_DEFS = [
+  { key: 'background', label: 'Land',
+    swatches: ['#EAE6DC','#C8A878','#A07848','#D0C898','#C0D4A0','#90B868'] },
+  { key: 'water',      label: 'Water',
+    swatches: ['#A8C8E8','#6898C8','#2D5F8A','#7BBFBF','#4A9898','#3878A8'] },
+  { key: 'park',       label: 'Parks',
+    swatches: ['#B8D898','#D0E890','#80C870','#50A858','#407838','#305828'] },
+  { key: 'urban_res',  label: 'Urban',
+    swatches: ['#E8E0D4','#D8C8B0','#E0E0E0','#C8C8C8','#D8B8D8','#B898C8'] },
+  { key: 'building',   label: 'Buildings',
+    swatches: ['#CEC8C0','#A8A098','#C8906C','#B07050','#D8A840','#C88820'] },
+  { key: 'road_main',  label: 'Roads',
+    swatches: ['#FFFFFF','#C8C8C8','#F8E040','#E8A820','#E84848','#C82020'] },
+];
+const svgSelIdx = SVG_COLOUR_DEFS.map(() => 0);
+let svgInclLabels = true, svgInclBuildings = true;
+let svgNatW = 0, svgNatH = 0, svgTx = 0, svgTy = 0, svgScl = 1;
+let svgCurrentUrl = '';
+let svgCurrentStl: any = null;
+let svgRegenTimer: ReturnType<typeof setTimeout> | null = null;
+let svgRegenAbort: AbortController | null = null;
+let _cachedOsmData: { elements?: Record<string, unknown>[] } | null = null;
+let svgCurrentText = '';
+
+const svgView    = document.getElementById('svg-view')!;
+const svgVp      = document.getElementById('svg-vp')!;
+const svgWrapEl  = document.getElementById('svg-wrap')!;
+const svgScaleEl = document.getElementById('svg-scale-display')!;
+const svgSizeEl  = document.getElementById('svg-size-display')!;
+const svgRegenEl = document.getElementById('svg-regen-status')!;
+const svgDlBtn   = document.getElementById('svg-btn-dl') as HTMLAnchorElement;
+const svg3dBtn   = document.getElementById('svg-btn-3d') as HTMLButtonElement;
+
+function svgApply() {
+  svgWrapEl.style.transform = `translate(${svgTx}px,${svgTy}px) scale(${svgScl})`;
+  svgScaleEl.textContent = Math.round(svgScl * 100) + '%';
+}
+
+function svgFit() {
+  if (!svgNatW || !svgNatH) return;
+  const m = 40, vw = svgVp.clientWidth, vh = svgVp.clientHeight;
+  svgScl = Math.min((vw - m*2) / svgNatW, (vh - m*2) / svgNatH);
+  svgTx = (vw - svgNatW * svgScl) / 2;
+  svgTy = (vh - svgNatH * svgScl) / 2;
+  svgApply();
+}
+
+async function svgShow(text: string, initial: boolean) {
+  const doc   = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svgEl = doc.documentElement;
+  svgNatW = parseFloat(svgEl.getAttribute('width') || '0');
+  svgNatH = parseFloat(svgEl.getAttribute('height') || '0');
+  const vb = svgEl.getAttribute('viewBox');
+  if (vb) {
+    const p = vb.trim().split(/[\s,]+/).map(Number);
+    if (p.length >= 4) { if (!svgNatW) svgNatW = p[2]; if (!svgNatH) svgNatH = p[3]; }
+  }
+  if (!svgNatW) svgNatW = 1000; if (!svgNatH) svgNatH = 1000;
+  svgEl.setAttribute('width',  String(svgNatW));
+  svgEl.setAttribute('height', String(svgNatH));
+  if (!initial) {
+    svgWrapEl.style.transition = 'opacity 0.22s'; svgWrapEl.style.opacity = '0';
+    await new Promise(r => setTimeout(r, 180));
+  }
+  svgWrapEl.innerHTML = ''; svgWrapEl.appendChild(svgEl);
+  svgSizeEl.textContent = `${Math.round(svgNatW)} × ${Math.round(svgNatH)} px`;
+  svgFit();
+  if (!initial) {
+    svgWrapEl.style.opacity = '1';
+    setTimeout(() => { svgWrapEl.style.transition = ''; }, 250);
+  }
+}
+
+function svgOverrides(): Record<string, string> {
+  const hexShade = (hex: string, d: number) => {
+    const parse = (s: number, e: number) => Math.max(0, Math.min(255, parseInt(hex.slice(s, e), 16) + d));
+    return '#' + [parse(1,3), parse(3,5), parse(5,7)].map(v => v.toString(16).padStart(2,'0')).join('');
+  };
+  const o: Record<string,string> = {};
+  SVG_COLOUR_DEFS.forEach((def, i) => {
+    const c = def.swatches[svgSelIdx[i]];
+    o[def.key] = c;
+    if (def.key === 'background') o.agri       = c;
+    if (def.key === 'urban_res')  o.urban_ind  = hexShade(c, -20);
+    if (def.key === 'road_main')  o.road_other = hexShade(c, -15);
+  });
+  return o;
+}
+
+function svgInitPicker() {
+  const el = document.getElementById('svg-colour-picker')!;
+  el.innerHTML = SVG_COLOUR_DEFS.map((def, i) =>
+    `<div class="colour-row"><span class="colour-key-label">${def.label}</span>` +
+    `<div class="swatch-row">${def.swatches.map((c, j) =>
+      `<div class="swatch${j===0?' active':''}" style="background:${c}" data-cat="${i}" data-idx="${j}"></div>`
+    ).join('')}</div></div>`
+  ).join('');
+  el.addEventListener('click', e => {
+    const t = (e.target as HTMLElement).closest('.swatch') as HTMLElement | null;
+    if (!t) return;
+    const cat = +t.dataset.cat!, idx = +t.dataset.idx!;
+    svgSelIdx[cat] = idx;
+    el.querySelectorAll(`.swatch[data-cat="${cat}"]`).forEach((s, j) =>
+      (s as HTMLElement).classList.toggle('active', j === idx));
+    svgScheduleRegen();
+  });
+}
+
+function svgScheduleRegen() {
+  if (svgRegenTimer) clearTimeout(svgRegenTimer);
+  svgRegenTimer = setTimeout(svgRegen, 80);
+}
+
+async function svgRegen() {
+  if (!confirmed || !_cachedOsmData) return;
+  const bbox = rotSelAabb(confirmed);
+  svgRegenEl.textContent = 'Updating…';
+  try {
+    const bboxArr: [number, number, number, number] = [bbox.west, bbox.south, bbox.east, bbox.north];
+    const svgEl = renderSvg({
+      osmData: _cachedOsmData,
+      bbox: bboxArr,
+      merchType,
+      coasterShape,
+      includeLabels:    svgInclLabels,
+      includeBuildings: svgInclBuildings,
+      paletteOverrides: svgOverrides(),
+    });
+    const text = svgToString(svgEl);
+    const blobUrl = svgToBlobUrl(svgEl);
+    if (svgCurrentUrl.startsWith('blob:')) URL.revokeObjectURL(svgCurrentUrl);
+    svgCurrentUrl = blobUrl; svgCurrentText = text;
+    svgDlBtn.href = blobUrl;
+    await svgShow(text, false);
+    svgRegenEl.textContent = '';
+  } catch (e: any) {
+    if (e.name !== 'AbortError') svgRegenEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function openSvgView(url: string, text: string, stlResult: any) {
+  svgCurrentUrl = url; svgCurrentText = text; svgCurrentStl = stlResult;
+  svgDlBtn.href = url;
+  const is3d = ['coaster','placemat','3d_print'].includes(merchType);
+  svg3dBtn.style.display = is3d ? 'block' : 'none';
+  if (!is3d) { svgDlBtn.style.borderColor = '#4a9eff'; svgDlBtn.style.color = '#4a9eff'; }
+  else        { svgDlBtn.style.borderColor = ''; svgDlBtn.style.color = ''; }
+  svgView.style.display = 'flex';
+  // Wait two frames so the browser has done a layout pass before measuring clientWidth
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r as FrameRequestCallback)));
+  await svgShow(text, true);
+  svgInitPicker();
+}
+
+// ── SVG viewer event listeners ────────────────────────────────────────────────
+document.getElementById('btn-back')!.addEventListener('click', () => {
+  svgView.style.display = 'none';
+  genBtn.disabled = false;
+  genBtn.onclick = generate;
+  (document.getElementById('btn-text') as HTMLElement).textContent = 'Generate Design';
+  (document.getElementById('spinner') as HTMLElement).style.display = 'none';
+});
+
+document.getElementById('svg-btn-fit')!.addEventListener('click', svgFit);
+document.getElementById('svg-btn-100')!.addEventListener('click', () => {
+  svgScl = 1;
+  svgTx = (svgVp.clientWidth  - svgNatW) / 2;
+  svgTy = (svgVp.clientHeight - svgNatH) / 2;
+  svgApply();
+});
+
+document.getElementById('svg-tog-labels')!.addEventListener('click', function(this: HTMLElement) {
+  this.classList.toggle('on');
+  svgInclLabels = this.classList.contains('on');
+  svgScheduleRegen();
+});
+document.getElementById('svg-tog-buildings')!.addEventListener('click', function(this: HTMLElement) {
+  this.classList.toggle('on');
+  svgInclBuildings = this.classList.contains('on');
+  svgScheduleRegen();
+});
+
+svg3dBtn.addEventListener('click', () => {
+  if (!confirmed) return;
+  const bbox = rotSelAabb(confirmed);
+  svgVp.classList.add('tilt-away');
+  setTimeout(() => {
+    const p = new URLSearchParams({
+      svg: svgCurrentUrl,
+      west: String(bbox.west), south: String(bbox.south),
+      east: String(bbox.east), north: String(bbox.north),
+      merch: merchType, coaster_shape: coasterShape,
+    });
+    if (svgCurrentStl?.stl_buildings_url) p.set('stl_buildings', svgCurrentStl.stl_buildings_url);
+    if (svgCurrentStl?.stl_land_url)      p.set('stl_land',      svgCurrentStl.stl_land_url);
+    if (svgCurrentStl?.stl_water_url)     p.set('stl_water',     svgCurrentStl.stl_water_url);
+    window.location.href = `/3d-viewer.html?${p}`;
+  }, 650);
+});
+
+// Pan/zoom on SVG viewport
+svgVp.addEventListener('wheel', (e: WheelEvent) => {
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const r = svgVp.getBoundingClientRect();
+  svgTx = (e.clientX - r.left) - ((e.clientX - r.left) - svgTx) * f;
+  svgTy = (e.clientY - r.top)  - ((e.clientY - r.top)  - svgTy) * f;
+  svgScl *= f;
+  svgApply();
+}, { passive: false });
+
+let svgDrag = false, svgDragX = 0, svgDragY = 0;
+svgVp.addEventListener('mousedown', (e: MouseEvent) => {
+  if (e.button !== 0) return;
+  svgDrag = true; svgDragX = e.clientX; svgDragY = e.clientY;
+  svgVp.classList.add('dragging');
+});
+window.addEventListener('mousemove', (e: MouseEvent) => {
+  if (!svgDrag) return;
+  svgTx += e.clientX - svgDragX; svgTy += e.clientY - svgDragY;
+  svgDragX = e.clientX; svgDragY = e.clientY;
+  svgApply();
+});
+window.addEventListener('mouseup', () => {
+  if (!svgDrag) return;
+  svgDrag = false; svgVp.classList.remove('dragging');
+});
+
+// ---------------------------------------------------------------------------
+// Generate — transition then show inline SVG viewer
+// ---------------------------------------------------------------------------
+const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
 
 async function generate(): Promise<void> {
   if (!confirmed) return;
-  const bbox    = rotSelAabb(confirmed);
+  const bbox   = rotSelAabb(confirmed);
   const spinner = document.getElementById('spinner')!;
   const btnText = document.getElementById('btn-text')!;
   const status  = document.getElementById('status')!;
 
   genBtn.disabled = true; genBtn.onclick = null;
-  resetOutputBtns();
   spinner.style.display = 'block';
-  btnText.textContent = 'Generating...'; status.textContent = '';
+  btnText.textContent = 'Generating…'; status.textContent = '';
 
-  const start = Date.now();
-  const timer = setInterval(() => {
-    status.textContent = `Fetching OSM data… ${Math.round((Date.now() - start) / 1000)}s`;
-  }, 1000);
   const abort = new AbortController();
-  const hard  = setTimeout(() => abort.abort(), 90_000);
+  setTimeout(() => abort.abort(), 90_000);
+
+  const estimatedMs = estimateGenMs(bbox);
+
+  async function fetchJson(url: string, body: object, signal?: AbortSignal) {
+    const r = await fetch(url, {
+      method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let msg = `Server ${r.status}`;
+      try { const j = await r.json(); if (j.detail) msg = j.detail; } catch { /* ignore */ }
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+
+  const bboxArr: [number, number, number, number] = [bbox.west, bbox.south, bbox.east, bbox.north];
+  const osmP = fetch(`/api/osm/features?${new URLSearchParams({
+    west: String(bbox.west), south: String(bbox.south),
+    east: String(bbox.east), north: String(bbox.north),
+  })}`, { signal: abort.signal })
+    .then(async r => {
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error((j as any).detail ?? `Backend ${r.status}`);
+      }
+      return r.json();
+    })
+    .then((osmData: { elements?: Record<string, unknown>[] }) => {
+      _cachedOsmData = osmData;
+      const svgEl = renderSvg({
+        osmData, bbox: bboxArr, merchType,
+        coasterShape, includeLabels: true, includeBuildings: true,
+      });
+      return { svg_url: svgToBlobUrl(svgEl), svgText: svgToString(svgEl) };
+    });
+
+  const stlP = fetchJson('/api/generate/stl', {
+    bbox, merch_type: merchType, coaster_shape: coasterShape,
+  }).catch(() => ({}));
 
   try {
-    status.textContent = 'Fetching OSM data…';
-    const svgRes = await fetch('/api/generate/svg', {
-      method: 'POST', signal: abort.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bbox, merch_type: merchType, style: mapStyle,
-        include_labels: includes.labels, include_buildings: includes.buildings,
-        include_roads: true, include_parks: true }),
-    });
-    clearInterval(timer); clearTimeout(hard);
-    if (!svgRes.ok) throw new Error(`Server ${svgRes.status}`);
-    const svgResult = await svgRes.json();
+    const [svgResult, stlResult] = await runTransition(osmP, stlP, estimatedMs);
 
-    status.textContent = 'Generating 3D model...';
-    const stlRes = await fetch('/api/generate/stl', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bbox, merch_type: merchType, height_mm: 5.0, base_thickness_mm: 2.0 }),
-    });
-    const stlResult = await stlRes.json();
+    await openSvgView(svgResult.svg_url, svgResult.svgText, stlResult);
 
-    const licRes  = await fetch('/api/license/check', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bbox, data_sources: ['osm'] }),
-    });
-    const licData = await licRes.json();
-
-    status.textContent = `Done — ${licData.attribution || '© OpenStreetMap contributors'}`;
-    spinner.style.display = 'none';
-    btnText.textContent = 'Regenerate';
-    genBtn.disabled = false;
-    genBtn.onclick = generate;
-
-    // Show both output buttons
-    outputDiv.style.display = 'flex';
-    view2dBtn.onclick = () => window.open(`/svg-viewer.html?svg=${encodeURIComponent(svgResult.svg_url)}`, '_blank');
-    view3dBtn.onclick = () => {
-      const b = rotSelAabb(confirmed!);
-      const p = new URLSearchParams({
-        west:  String(b.west),  south: String(b.south),
-        east:  String(b.east),  north: String(b.north),
-        style: mapStyle, merch: merchType,
-      });
-      if (stlResult.stl_buildings_url) p.set('stl_buildings', stlResult.stl_buildings_url);
-      if (stlResult.stl_land_url)      p.set('stl_land',      stlResult.stl_land_url);
-      if (stlResult.stl_water_url)     p.set('stl_water',     stlResult.stl_water_url);
-      window.open(`/3d-viewer.html?${p}`, '_blank');
-    };
+    const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
+    ov.style.transition = 'opacity 0.3s';
+    ov.style.opacity = '0';
+    await new Promise(r => setTimeout(r, 300));
+    ov.style.display = 'none';
+    ov.style.opacity = '1';
+    ov.style.transition = '';
 
   } catch (err: any) {
-    clearInterval(timer); clearTimeout(hard);
+    const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
+    ov.style.display = 'none';
+    ov.style.opacity = '1';
+    ov.style.transition = '';
     status.textContent = err.name === 'AbortError' ? 'Timed out — try a smaller area' : `Error: ${err.message}`;
     genBtn.disabled = false; btnText.textContent = 'Retry';
     spinner.style.display = 'none';
@@ -568,10 +1058,160 @@ async function generate(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Wire up (generate managed via onclick only — no persistent addEventListener)
+// Coaster shape cycling
+// ---------------------------------------------------------------------------
+function stepCoasterShape(dir: 1 | -1): void {
+  coasterShapeIdx = (coasterShapeIdx + dir + COASTER_SHAPES.length) % COASTER_SHAPES.length;
+  coasterShape = COASTER_SHAPES[coasterShapeIdx];
+  document.getElementById('coaster-icon')!.textContent  = COASTER_ICONS[coasterShape];
+  document.getElementById('coaster-shape-label')!.textContent = COASTER_LABELS[coasterShape];
+}
+
+document.getElementById('coaster-prev')!.addEventListener('click', (e) => { e.stopPropagation(); stepCoasterShape(-1); });
+document.getElementById('coaster-next')!.addEventListener('click', (e) => { e.stopPropagation(); stepCoasterShape(1); });
+
+// ---------------------------------------------------------------------------
+// Place search — Nominatim OSM geocoder (debounced, 500 ms)
+// ---------------------------------------------------------------------------
+function flyTobbox(west: number, south: number, east: number, north: number): void {
+  const cosLat = Math.cos((south + north) / 2 * Math.PI / 180);
+  const spanM  = Math.max((east - west) * cosLat * 111_320, (north - south) * 111_320);
+  const altM   = Math.max(spanM * 1.4, 2_000);
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2, altM),
+    orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
+    duration: 1.5,
+  });
+}
+
+const placeInput   = document.getElementById('place-search')   as HTMLInputElement;
+const placeResults = document.getElementById('search-results') as HTMLUListElement;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+placeInput.addEventListener('input', () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  const q = placeInput.value.trim();
+  if (q.length < 3) { placeResults.style.display = 'none'; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const res  = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`);
+      const data = await res.json();
+      placeResults.innerHTML = '';
+      if (!data.length) { placeResults.style.display = 'none'; return; }
+      for (const item of data) {
+        const li = document.createElement('li');
+        li.textContent = item.display_name;
+        li.addEventListener('click', () => {
+          const [s, n, w, e] = (item.boundingbox as string[]).map(Number);
+          flyTobbox(w, s, e, n);
+          placeInput.value = item.display_name.split(',')[0].trim();
+          placeResults.style.display = 'none';
+        });
+        placeResults.appendChild(li);
+      }
+      placeResults.style.display = 'block';
+    } catch { /* silently ignore network errors */ }
+  }, 500);
+});
+
+placeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { placeResults.style.display = 'none'; placeInput.blur(); }
+});
+
+document.addEventListener('click', (e) => {
+  if (!placeInput.contains(e.target as Node) && !placeResults.contains(e.target as Node)) {
+    placeResults.style.display = 'none';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Save project
+// ---------------------------------------------------------------------------
+async function saveProject(): Promise<void> {
+  const token = localStorage.getItem('hoas_token');
+  if (!token) {
+    window.location.href = '/login.html?returnTo=' + encodeURIComponent(window.location.href);
+    return;
+  }
+  if (!confirmed) return;
+  const bbox      = rotSelAabb(confirmed);
+  const nameEl    = document.getElementById('svg-save-name')    as HTMLInputElement;
+  const statusEl  = document.getElementById('svg-save-status')  as HTMLElement;
+  const name      = nameEl.value.trim() || `${merchType} — ${new Date().toLocaleDateString('en-GB')}`;
+  statusEl.textContent = 'Saving…';
+  try {
+    // Persist client-rendered blob to a stable server URL for dashboard thumbnails
+    let persistUrl: string | null = svgCurrentUrl || null;
+    if (svgCurrentText && svgCurrentUrl.startsWith('blob:')) {
+      const r = await fetch('/api/save-svg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ svg_text: svgCurrentText }),
+      });
+      if (r.ok) persistUrl = (await r.json()).svg_url;
+    }
+    const resp = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        name,
+        merch_type:        merchType,
+        bbox_west:         bbox.west,
+        bbox_south:        bbox.south,
+        bbox_east:         bbox.east,
+        bbox_north:        bbox.north,
+        style:             'osm_default',
+        coaster_shape:     coasterShape,
+        palette_overrides: svgOverrides(),
+        include_labels:    svgInclLabels,
+        include_buildings: svgInclBuildings,
+        svg_url:           persistUrl,
+        stl_buildings_url: svgCurrentStl?.stl_buildings_url || null,
+        stl_land_url:      svgCurrentStl?.stl_land_url      || null,
+        stl_water_url:     svgCurrentStl?.stl_water_url     || null,
+      }),
+    });
+    if (resp.status === 401) {
+      localStorage.removeItem('hoas_token');
+      window.location.href = '/login.html?returnTo=' + encodeURIComponent(window.location.href);
+      return;
+    }
+    if (!resp.ok) throw new Error(`Server ${resp.status}`);
+    statusEl.textContent = 'Saved!';
+    setTimeout(() => { statusEl.textContent = ''; }, 2500);
+  } catch (e: any) {
+    statusEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+document.getElementById('svg-btn-save')!.addEventListener('click', saveProject);
+
+// ---------------------------------------------------------------------------
+// User nav
+// ---------------------------------------------------------------------------
+function updateUserNav(): void {
+  const email   = localStorage.getItem('hoas_email');
+  const navEls  = document.querySelectorAll<HTMLElement>('.user-nav-slot');
+  navEls.forEach(el => {
+    if (email) {
+      el.innerHTML =
+        `<a href="/dashboard.html" class="btn" style="margin-bottom:4px">⊞ My Designs</a>` +
+        `<button class="btn" id="logout-btn-${el.dataset.slot}">↩ Logout</button>`;
+      el.querySelector('button')?.addEventListener('click', () => {
+        localStorage.removeItem('hoas_token');
+        localStorage.removeItem('hoas_refresh');
+        localStorage.removeItem('hoas_email');
+        updateUserNav();
+      });
+    } else {
+      el.innerHTML = `<a href="/login.html" class="btn">⊞ Login / Register</a>`;
+    }
+  });
+}
+updateUserNav();
+
+// ---------------------------------------------------------------------------
+// Wire up
 // ---------------------------------------------------------------------------
 genBtn.onclick = generate;
-document.getElementById('draw-btn')!.addEventListener('click', startSelection);
 document.querySelectorAll<HTMLElement>('.merch-btn').forEach(el => el.addEventListener('click', () => selectMerch(el)));
-document.querySelectorAll<HTMLElement>('.style-btn').forEach(el => el.addEventListener('click', () => selectStyle(el)));
-document.querySelectorAll<HTMLElement>('.toggle').forEach(el => el.addEventListener('click', () => toggle(el)));

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
@@ -15,17 +15,18 @@ from app.models.schemas import (
     STLGenerationRequest,
     LicenseCheckRequest,
 )
-from app.services.osm_fetcher import OSMFetcher
+from app.services.osm_fetcher import OSMFetcher, OverpassError
 from app.services.svg_generator import SVGGenerator
 from app.services.stl_generator import STLGenerator
 from app.services.license_tracker import LicenseTracker
+from app.api.auth import router as auth_router
+from app.api.projects import router as projects_router
 
 
 settings = get_settings()
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data"))
 
-# Ensure data dir exists before StaticFiles tries to mount
 os.makedirs(os.path.join(DATA_DIR, "svg_output"), exist_ok=True)
 os.makedirs(os.path.join(DATA_DIR, "stl_output"), exist_ok=True)
 
@@ -37,16 +38,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Heart on a Sleeve API", lifespan=lifespan)
 
-# Serve CesiumJS frontend directly from backend
-CESIUM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "cesium"))
-app.mount("/cesium", StaticFiles(directory=CESIUM_DIR, html=True), name="cesium")
-
-
-@app.get("/")
-async def root():
-    """Redirect to the CesiumJS map selector."""
-    return RedirectResponse(url="/cesium/", status_code=302)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -55,12 +46,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount CesiumJS frontend only when running outside Docker (source tree present)
+CESIUM_DIR = os.environ.get("CESIUM_DIR") or os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "cesium")
+)
+if os.path.isdir(CESIUM_DIR):
+    app.mount("/cesium", StaticFiles(directory=CESIUM_DIR, html=True), name="cesium")
+
+    @app.get("/")
+    async def root():
+        return RedirectResponse(url="/cesium/", status_code=302)
+
+app.include_router(auth_router)
+app.include_router(projects_router)
+
 osm_fetcher = OSMFetcher(settings.overpass_endpoint)
 svg_generator = SVGGenerator(MERCH_SPECS)
 stl_generator = STLGenerator()
 license_tracker = LicenseTracker()
 
-# Store current bbox for SVG coordinate projection
 _current_bbox: dict | None = None
 
 
@@ -74,7 +78,10 @@ async def fetch_osm(bbox: BBox):
 async def get_osm_features(west: float, south: float, east: float, north: float):
     """Proxy for the 3D viewer — avoids direct browser→Overpass fetch (CORS + UA issues)."""
     bbox = BBox(west=west, south=south, east=east, north=north)
-    return await osm_fetcher.fetch_area(bbox)
+    try:
+        return await osm_fetcher.fetch_area(bbox)
+    except OverpassError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/osm/license-info")
@@ -85,21 +92,31 @@ async def get_license_info(bbox: BBox):
 @app.post("/api/generate/svg")
 async def generate_svg(req: SVGGenerationRequest):
     global _current_bbox
-    osm_data = await osm_fetcher.fetch_area(req.bbox)
+    try:
+        osm_data = await osm_fetcher.fetch_area(req.bbox)
+    except OverpassError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
     _current_bbox = req.bbox.model_dump()
     bbox_tuple = (req.bbox.west, req.bbox.south, req.bbox.east, req.bbox.north)
     loop = asyncio.get_event_loop()
-    svg_io = await loop.run_in_executor(None, functools.partial(
-        svg_generator.generate,
-        osm_data=osm_data,
-        merch_type=req.merch_type,
-        style=req.style,
-        include_labels=req.include_labels,
-        include_buildings=req.include_buildings,
-        include_roads=req.include_roads,
-        include_parks=req.include_parks,
-        bbox=bbox_tuple,
-    ))
+    try:
+        svg_io = await loop.run_in_executor(None, functools.partial(
+            svg_generator.generate,
+            osm_data=osm_data,
+            merch_type=req.merch_type,
+            style=req.style,
+            include_labels=req.include_labels,
+            include_buildings=req.include_buildings,
+            include_roads=req.include_roads,
+            include_parks=req.include_parks,
+            bbox=bbox_tuple,
+            coaster_shape=req.coaster_shape,
+            palette_overrides=req.palette_overrides or None,
+        ))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SVG generation failed: {e}")
+
     from datetime import datetime
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = os.path.join(DATA_DIR, "svg_output", f"design_{timestamp}.svg")
@@ -108,30 +125,52 @@ async def generate_svg(req: SVGGenerationRequest):
     return {"svg_path": filename, "svg_url": f"/output/svg_output/design_{timestamp}.svg", "merch_type": req.merch_type}
 
 
+@app.post("/api/save-svg")
+async def save_svg(payload: dict):
+    """Accept SVG text from the client renderer and persist it to /output/svg_output/."""
+    svg_text: str = payload.get("svg_text", "")
+    if not svg_text:
+        raise HTTPException(status_code=400, detail="svg_text is required")
+    from datetime import datetime
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    filename = os.path.join(DATA_DIR, "svg_output", f"design_{timestamp}.svg")
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(svg_text)
+    return {"svg_url": f"/output/svg_output/design_{timestamp}.svg"}
+
+
 @app.post("/api/generate/stl")
 async def generate_stl(req: STLGenerationRequest):
     global _current_bbox
-    osm_data = await osm_fetcher.fetch_area(req.bbox)
+    try:
+        osm_data = await osm_fetcher.fetch_area(req.bbox)
+    except OverpassError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
     _current_bbox = req.bbox.model_dump()
     bbox_tuple = (req.bbox.west, req.bbox.south, req.bbox.east, req.bbox.north)
     loop = asyncio.get_event_loop()
-    # Run in thread — STL generator is CPU-bound (shapely/trimesh) and may
-    # make a blocking HTTP call to OpenTopoData for elevation data.
-    parts = await loop.run_in_executor(None, functools.partial(
-        stl_generator.generate,
-        osm_data=osm_data,
-        merch_type=req.merch_type,
-        bbox=bbox_tuple,
-        bldg_height=req.bldg_height,
-        water_start=req.water_start,
-        water_end=req.water_end,
-        land_start=req.land_start,
-        land_end=req.land_end,
-        gap_close_mm=req.gap_close_mm,
-        water_expand_mm=req.water_expand_mm,
-        min_bldg_mm=req.min_bldg_mm,
-        collar_mm=req.collar_mm,
-    ))
+    try:
+        # CPU-bound + blocking HTTP (OpenTopoData elevation) — run in thread pool
+        parts = await loop.run_in_executor(None, functools.partial(
+            stl_generator.generate,
+            osm_data=osm_data,
+            merch_type=req.merch_type,
+            bbox=bbox_tuple,
+            bldg_height=req.bldg_height,
+            water_start=req.water_start,
+            water_end=req.water_end,
+            land_start=req.land_start,
+            land_end=req.land_end,
+            gap_close_mm=req.gap_close_mm,
+            water_expand_mm=req.water_expand_mm,
+            min_bldg_mm=req.min_bldg_mm,
+            collar_mm=req.collar_mm,
+            coaster_shape=req.coaster_shape,
+        ))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"STL generation failed: {e}")
+
     from datetime import datetime
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     urls = {}

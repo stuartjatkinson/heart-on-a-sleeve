@@ -52,11 +52,14 @@ class SVGGenerationRequest(BaseModel):
     include_buildings: bool = True
     include_roads: bool = True
     include_parks: bool = True
+    coaster_shape: str = "square"           # 'square' | 'circle' | 'hexagon'
+    palette_overrides: dict[str, str] = {}  # per-category hex colour overrides
 
 
 class STLGenerationRequest(BaseModel):
     bbox: BBox
     merch_type: str = "3d_print"
+    coaster_shape: str = "square"   # 'square' | 'circle' | 'hexagon'
     # Layer heights (mm) — all tunable from the viewer
     bldg_height: float = 4.0       # buildings + roads: 0 → bldg_height
     water_start: float = 1.0       # water layer bottom

@@ -25,7 +25,7 @@ import requests
 import trimesh
 import numpy as np
 from shapely.geometry import (
-    Polygon, MultiPolygon, LineString,
+    Polygon, MultiPolygon, LineString, Point,
     box as shapely_box,
 )
 from shapely.ops import unary_union
@@ -82,6 +82,7 @@ class STLGenerator:
         water_expand_mm: float = WATER_EXPAND,
         min_bldg_mm:     float = MIN_BLDG_H,
         collar_mm:       float = 1.0,
+        coaster_shape:   str   = 'square',
         # Legacy compat
         height_mm: float = BLDG_H_DEFAULT,
         base_thickness_mm: float = 2.0,
@@ -111,11 +112,14 @@ class STLGenerator:
         elev_grid = _fetch_elevation(west, south, east, north) if topology else None
         self._collar = collar_mm
 
+        # For coasters, the plate outline may be non-rectangular
+        active_shape = coaster_shape if merch_type == 'coaster' else 'square'
+
         return self._build(
             ways, way_pts, plate_w, plate_h,
             bldg_height, water_start, water_end, land_start, land_end,
             gap_close_mm, water_expand_mm, min_bldg_mm, self._collar,
-            topology, elev_grid,
+            topology, elev_grid, active_shape,
         )
 
     # ── Main build ─────────────────────────────────────────────────────────────
@@ -125,7 +129,7 @@ class STLGenerator:
         plate_w, plate_h,
         bldg_h, water_start, water_end, land_start, land_end,
         gap_close, water_expand, min_bldg, collar,
-        topology, elev_grid,
+        topology, elev_grid, coaster_shape: str = 'square',
     ) -> dict[str, BytesIO]:
 
         # ── 1. Collect raw shapes ──────────────────────────────────────────────
@@ -191,18 +195,20 @@ class STLGenerator:
         urban_union = make_valid(bldg_union.union(road_union)) if not road_union.is_empty else bldg_union
 
         # ── 3. Build three pieces ──────────────────────────────────────────────
+        plate_shape, outer_shape = _plate_shapes(plate_w, plate_h, collar, coaster_shape)
+
         return {
             'buildings': _export(self._buildings_piece(
                 bldg_polys, bldg_heights, raw_roads,
                 bldg_union, road_union, urban_union,
-                plate_w, plate_h, bldg_h, collar, topology
+                plate_shape, outer_shape, bldg_h, topology
             )),
             'water': _export(self._water_piece(
-                water_union, urban_union, plate_w, plate_h, water_start, water_end
+                water_union, urban_union, plate_shape, water_start, water_end
             )),
             'land': _export(self._land_piece(
-                urban_union, water_union, plate_w, plate_h,
-                land_start, land_end, collar, topology, elev_grid
+                urban_union, water_union, plate_shape, outer_shape,
+                land_start, land_end, topology, elev_grid
             )),
         }
 
@@ -214,14 +220,11 @@ class STLGenerator:
     def _buildings_piece(
         self, bldg_polys, bldg_heights, raw_roads,
         bldg_union, road_union, urban_union,
-        plate_w, plate_h, bldg_h, collar, topology,
+        plate_shape, outer_shape, bldg_h, topology,
     ) -> list[trimesh.Trimesh]:
         meshes = []
-        plate_rect = shapely_box(0, 0, plate_w, plate_h)
-        outer_rect = shapely_box(-collar, -collar, plate_w + collar, plate_h + collar)
-
         # Outer collar walls — frame that water and lid sit inside
-        collar_ring = make_valid(outer_rect.difference(plate_rect))
+        collar_ring = make_valid(outer_shape.difference(plate_shape))
         m = _extrude(collar_ring, bldg_h)
         if m: meshes.append(m)
 
@@ -250,12 +253,11 @@ class STLGenerator:
 
     def _water_piece(
         self, water_union, urban_union,
-        plate_w, plate_h, water_start, water_end,
+        plate_shape, water_start, water_end,
     ) -> list[trimesh.Trimesh]:
         if water_union.is_empty:
             return []
-        plate_rect = shapely_box(0, 0, plate_w, plate_h)
-        water = make_valid(water_union.intersection(plate_rect))
+        water = make_valid(water_union.intersection(plate_shape))
         if not urban_union.is_empty:
             water = make_valid(water.difference(urban_union))
         thickness = max(water_end - water_start, 0.5)
@@ -272,22 +274,19 @@ class STLGenerator:
 
     def _land_piece(
         self, urban_union, water_union,
-        plate_w, plate_h,
-        land_start, land_end, collar,
+        plate_shape, outer_shape,
+        land_start, land_end,
         topology, elev_grid,
     ) -> list[trimesh.Trimesh]:
-        plate_rect = shapely_box(0, 0, plate_w, plate_h)
-        outer_rect = shapely_box(-collar, -collar, plate_w + collar, plate_h + collar)
-
         # Collar ring — always solid, creates the outer frame of the lid
-        collar_ring = make_valid(outer_rect.difference(plate_rect))
+        collar_ring = make_valid(outer_shape.difference(plate_shape))
 
         # Inner land — plate area minus buildings/roads (and water if present)
-        inner = plate_rect
+        inner = plate_shape
         if not urban_union.is_empty:
             inner = make_valid(inner.difference(urban_union))
         if not water_union.is_empty:
-            inner = make_valid(inner.difference(water_union.intersection(plate_rect)))
+            inner = make_valid(inner.difference(water_union.intersection(plate_shape)))
 
         # Combine inner land + collar ring = full lid shape
         lid_shape = make_valid(inner.union(collar_ring))
@@ -301,12 +300,36 @@ class STLGenerator:
                 if m: meshes.append(m)
             return meshes
         else:
-            return self._terrain_lid(lid_shape, elev_grid, plate_w, plate_h,
+            bounds = plate_shape.bounds  # (minx, miny, maxx, maxy)
+            pw, ph = bounds[2] - bounds[0], bounds[3] - bounds[1]
+            return self._terrain_lid(lid_shape, elev_grid, pw, ph,
                                      land_start, land_end)
 
     def _terrain_lid(self, land_shape, elev_grid, plate_w, plate_h, z_bottom, z_top):
         terrain = _build_terrain_mesh(elev_grid, plate_w, plate_h, z_bottom, z_top - z_bottom)
         return [terrain] if terrain else []
+
+
+# ── Shape helpers ─────────────────────────────────────────────────────────────
+
+def _plate_shapes(w: float, h: float, collar: float, shape: str) -> tuple[Polygon, Polygon]:
+    """Return (plate_shape, outer_shape) for the given coaster_shape."""
+    if shape == 'circle':
+        cx, cy, r = w / 2, h / 2, min(w, h) / 2
+        return (Point(cx, cy).buffer(r, resolution=64),
+                Point(cx, cy).buffer(r + collar, resolution=64))
+    if shape == 'hexagon':
+        def _hex(r: float) -> Polygon:
+            cx, cy = w / 2, h / 2
+            return Polygon([
+                (cx + r * math.cos(math.pi / 2 + i * math.pi / 3),
+                 cy + r * math.sin(math.pi / 2 + i * math.pi / 3))
+                for i in range(6)
+            ])
+        return _hex(min(w, h) / 2), _hex(min(w, h) / 2 + collar)
+    # Default: square
+    return (shapely_box(0, 0, w, h),
+            shapely_box(-collar, -collar, w + collar, h + collar))
 
 
 # ── Geometry primitives ───────────────────────────────────────────────────────
