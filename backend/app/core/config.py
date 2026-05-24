@@ -1,5 +1,7 @@
-from pydantic_settings import BaseSettings
+import json
 from functools import lru_cache
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -27,6 +29,16 @@ class Settings(BaseSettings):
     # App
     secret_key: str = "change-me-in-production"
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return [o.strip() for o in v.split(",")]
+        return v
 
     class Config:
         env_file = ".env"
