@@ -1,6 +1,5 @@
 import json
 from functools import lru_cache
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -28,17 +27,16 @@ class Settings(BaseSettings):
 
     # App
     secret_key: str = "change-me-in-production"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    # Stored as a plain string; use .get_cors_origins() to get the parsed list.
+    # Accepts comma-separated ("a,b") or JSON array ('["a","b"]').
+    cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except (json.JSONDecodeError, ValueError):
-                return [o.strip() for o in v.split(",")]
-        return v
+    def get_cors_origins(self) -> list[str]:
+        try:
+            parsed = json.loads(self.cors_origins)
+            return parsed if isinstance(parsed, list) else [parsed]
+        except (json.JSONDecodeError, ValueError):
+            return [o.strip() for o in self.cors_origins.split(",")]
 
     class Config:
         env_file = ".env"
