@@ -27,6 +27,10 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.core.database import engine, Base
+    from app.models import db_models  # noqa: F401 — ensure models are registered
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     (OUTPUT_DIR / "svg").mkdir(parents=True, exist_ok=True)
     (OUTPUT_DIR / "stl").mkdir(parents=True, exist_ok=True)
     yield
