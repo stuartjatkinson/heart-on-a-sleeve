@@ -245,16 +245,37 @@ const matBldgHi  = makeMat('std', 'bldgHi',  'bldgHi',  { roughness:0.6, metalne
 const osmMats = [matGround, matRoad, matRoadMn, matWater, matPark, matBldgLo, matBldgMid, matBldgHi];
 const allMats = [...osmMats]; // print part mats added later
 
-// ── Ground + grid ─────────────────────────────────────────────────────────────
+// ── Ground — exactly the bbox footprint ──────────────────────────────────────
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(sceneW + 400, sceneD + 400), matGround,
+  new THREE.PlaneGeometry(sceneW, sceneD), matGround,
 );
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const grid = new THREE.GridHelper(Math.max(sceneW, sceneD) * 1.2, 30, 0x2244aa, 0x1a3366);
-scene.add(grid);
+// Thin border outline at the bbox edge
+{
+  const hw = sceneW / 2, hd = sceneD / 2;
+  const pts = [
+    new THREE.Vector3(-hw, 0.2, -hd), new THREE.Vector3( hw, 0.2, -hd),
+    new THREE.Vector3( hw, 0.2,  hd), new THREE.Vector3(-hw, 0.2,  hd),
+    new THREE.Vector3(-hw, 0.2, -hd),
+  ];
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0x2244aa }),
+  ));
+}
+
+// ── Bbox clipping planes — applied to OSM materials only ──────────────────────
+renderer.localClippingEnabled = true;
+const bboxClip = [
+  new THREE.Plane(new THREE.Vector3( 1, 0,  0), sceneW / 2),
+  new THREE.Plane(new THREE.Vector3(-1, 0,  0), sceneW / 2),
+  new THREE.Plane(new THREE.Vector3( 0, 0,  1), sceneD / 2),
+  new THREE.Plane(new THREE.Vector3( 0, 0, -1), sceneD / 2),
+];
+osmMats.forEach(m => { m.clippingPlanes = bboxClip; });
 
 // ── OSM group (all live-render meshes live here) ──────────────────────────────
 const osmGroup = new THREE.Group();
@@ -510,6 +531,10 @@ const printLayers = {
   land:      new THREE.Group(),
 };
 Object.values(printLayers).forEach(g => { g.visible = false; printGroup.add(g); });
+// Separate group for the baseplate — shown immediately, never wireframed
+const baseplateGroup = new THREE.Group();
+baseplateGroup.visible = false;
+printGroup.add(baseplateGroup);
 const printLayerMats = { buildings: null, water: null, land: null };
 
 // ── Fabric Preview — SVG texture + buildings ──────────────────────────────────
@@ -555,7 +580,6 @@ async function loadPrintParts() {
       const geo = await new Promise((res, rej) => loader.load(url, res, undefined, rej));
       geo.computeVertexNormals();
       geo.rotateX(-Math.PI / 2);
-
       const cfg = PRINT_MAT[key];
       const mat = new THREE.MeshStandardMaterial({
         color: cfg.solid, roughness: 0.65, metalness: 0.05,
@@ -564,7 +588,6 @@ async function loadPrintParts() {
       mat._wireColor  = cfg.wire;
       allMats.push(mat);
       printLayerMats[key] = mat;
-
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = mesh.receiveShadow = true;
       printLayers[key].add(mesh);
@@ -573,18 +596,50 @@ async function loadPrintParts() {
     }
   }
 
-  // Expose all layers for accurate bounding box, then hide for animation
+  // Compute scale using both axes so a non-square bbox doesn't stretch the model
   Object.values(printLayers).forEach(g => { g.visible = true; });
   {
     const sizeBox = new THREE.Box3().setFromObject(printGroup);
     const sz = new THREE.Vector3();
     sizeBox.getSize(sz);
-    if (sz.x > 0) printGroup.scale.setScalar(sceneW / sz.x);
+    const scale = sz.x > 0 && sz.z > 0
+      ? Math.min(sceneW / sz.x, sceneD / sz.z)  // fit within bbox on both axes
+      : sz.x > 0 ? sceneW / sz.x : 1;
+    printGroup.scale.setScalar(scale);
   }
+
   const box = new THREE.Box3().setFromObject(printGroup);
   const centre = new THREE.Vector3();
   box.getCenter(centre);
-  printGroup.position.set(-centre.x, -box.min.y, -centre.z);
+  // Sit 2 units above ground so the baseplate has space to be seen
+  printGroup.position.set(-centre.x, -box.min.y + 2, -centre.z);
+
+  // ── Explicit baseplate — the tray water and land lid drop onto ────────────
+  // Size in STL-local units (before group scale is applied)
+  const stlBox = new THREE.Box3().setFromObject(printGroup);
+  const stlSz  = new THREE.Vector3();
+  stlBox.getSize(stlSz);
+  // Divide by scale to get pre-scale dimensions
+  const sc = printGroup.scale.x;
+  const bpW = stlSz.x / sc + 2, bpD = stlSz.z / sc + 2;
+  const bpH = Math.max(bpW, bpD) * 0.008; // ~0.8% of width as plate thickness
+
+  const bpGeo = new THREE.BoxGeometry(bpW, bpH, bpD);
+  const bpMat = new THREE.MeshStandardMaterial({ color: 0x787870, roughness: 0.85, metalness: 0.04 });
+  bpMat._solidColor = 0x787870;
+  bpMat._wireColor  = 0x778899;
+  allMats.push(bpMat);
+  const bpMesh = new THREE.Mesh(bpGeo, bpMat);
+  bpMesh.castShadow = bpMesh.receiveShadow = true;
+  // Position in pre-scale space at the bottom of the buildings layer
+  const bldBox = new THREE.Box3().setFromObject(printLayers.buildings);
+  bpMesh.position.set(
+    (bldBox.min.x + bldBox.max.x) / 2 / sc,
+    bldBox.min.y / sc - bpH / 2,
+    (bldBox.min.z + bldBox.max.z) / 2 / sc,
+  );
+  baseplateGroup.add(bpMesh); // separate group — shown before animation, never wireframed
+
   Object.values(printLayers).forEach(g => { g.visible = false; });
 
   printLoaded = true;
@@ -645,12 +700,27 @@ async function loadFabricPreview() {
   if (fabricLoaded) return;
   setStatus('Building fabric preview…');
 
-  // SVG as ground texture
+  // SVG as ground texture — rasterise via <img>→<canvas> for reliable WebGL support
   if (svgUrl) {
     try {
-      const tex = await new Promise((res, rej) =>
-        new THREE.TextureLoader().load(svgUrl, res, undefined, rej));
-      tex.colorSpace = THREE.SRGBColorSpace;
+      const tex = await new Promise((res, rej) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const SIZE = 2048;
+          const aspect = sceneW / sceneD;
+          const cw = aspect >= 1 ? SIZE : Math.round(SIZE * aspect);
+          const ch = aspect >= 1 ? Math.round(SIZE / aspect) : SIZE;
+          const cv = document.createElement('canvas');
+          cv.width = cw; cv.height = ch;
+          cv.getContext('2d').drawImage(img, 0, 0, cw, ch);
+          const t = new THREE.CanvasTexture(cv);
+          t.colorSpace = THREE.SRGBColorSpace;
+          res(t);
+        };
+        img.onerror = rej;
+        img.src = svgUrl;
+      });
       const plane = new THREE.Mesh(
         new THREE.PlaneGeometry(sceneW, sceneD),
         new THREE.MeshBasicMaterial({ map: tex }),
@@ -689,8 +759,11 @@ btnMode?.addEventListener('click', async function() {
       await loadPrintParts();
       osmGroup.visible   = false;
       printGroup.visible = true;
+      // Show the baseplate tray immediately so water/land have something to drop onto
+      baseplateGroup.visible = true;
       showingPreview     = true;
       this.textContent   = '🌍 Map View';
+      await new Promise(r => setTimeout(r, 400)); // let viewer settle on the tray
       await runPrintAnimation();
     } else {
       await loadFabricPreview();
@@ -700,10 +773,11 @@ btnMode?.addEventListener('click', async function() {
       this.textContent    = '🌍 Map View';
     }
   } else {
-    showingPreview      = false;
-    osmGroup.visible    = true;
-    printGroup.visible  = false;
-    fabricGroup.visible = false;
+    showingPreview         = false;
+    osmGroup.visible       = true;
+    printGroup.visible     = false;
+    fabricGroup.visible    = false;
+    baseplateGroup.visible = false;
     if (is3dPrint) Object.values(printLayers).forEach(g => { g.visible = false; g.position.y = 0; });
     this.textContent    = is3dPrint ? '🖨 Print Preview' : '🖼 Fabric Preview';
     this.classList.remove('on');

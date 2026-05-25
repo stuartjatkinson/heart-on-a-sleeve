@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Heart on a Sleeve — Map Selector</title>
+    <script>
+      // Auth guard — redirect to login before anything renders
+      if (!localStorage.getItem('hoas_token')) {
+        location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
+      }
+    </script>
     <link rel="stylesheet" href="/app.css">
     <style>
         /* ── Map-selector-specific styles only ── */
@@ -98,7 +104,7 @@
         /* ── Inline SVG viewer ── */
         #svg-view {
             display: none; position: fixed; inset: 0; z-index: 9998;
-            flex-direction: row; background: var(--bg-base);
+            flex-direction: row; background: var(--bg-page);
         }
         #svg-side {
             width: 272px; flex-shrink: 0; height: 100vh;
@@ -106,7 +112,7 @@
         }
         #svg-vp {
             flex: 1; position: relative; overflow: hidden;
-            cursor: grab; background: var(--bg-base);
+            cursor: grab; background: var(--bg-page);
         }
         #svg-vp.dragging  { cursor: grabbing; }
         #svg-vp.tilt-away {

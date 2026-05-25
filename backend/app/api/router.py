@@ -21,6 +21,7 @@ from app.services.stl_generator import STLGenerator
 from app.services.license_tracker import LicenseTracker
 from app.api.auth import router as auth_router
 from app.api.projects import router as projects_router
+from app import timing_utils
 
 
 settings = get_settings()
@@ -40,7 +41,7 @@ app = FastAPI(title="Heart on a Sleeve API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,6 +60,7 @@ if os.path.isdir(CESIUM_DIR):
 
 app.include_router(auth_router)
 app.include_router(projects_router)
+app.include_router(timing_utils.router)
 
 osm_fetcher = OSMFetcher(settings.overpass_endpoint)
 svg_generator = SVGGenerator(MERCH_SPECS)
@@ -76,11 +78,16 @@ async def fetch_osm(bbox: BBox):
 
 @app.get("/api/osm/features")
 async def get_osm_features(west: float, south: float, east: float, north: float):
-    """Proxy for the 3D viewer — avoids direct browser→Overpass fetch (CORS + UA issues)."""
+    import time as _t
     bbox = BBox(west=west, south=south, east=east, north=north)
+    t0 = _t.perf_counter()
     try:
-        return await osm_fetcher.fetch_area(bbox)
+        data = await osm_fetcher.fetch_area(bbox)
+        timing_utils.tlog("osm_features_total", (_t.perf_counter() - t0) * 1000,
+                          f"elements={len(data.get('elements', []))}")
+        return data
     except OverpassError as e:
+        timing_utils.tlog("osm_features_error", (_t.perf_counter() - t0) * 1000, str(e))
         raise HTTPException(status_code=502, detail=str(e))
 
 

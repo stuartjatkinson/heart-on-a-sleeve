@@ -2,118 +2,306 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Heart on a Sleeve — Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heart on a Sleeve — Sign In</title>
   <link rel="stylesheet" href="/app.css">
   <style>
-    html, body { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-    body { background: var(--bg-base); }
+    html, body {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    body {
+      background: var(--bg-page);
+    }
+    /* Subtle radial glow behind the card */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: radial-gradient(ellipse 60% 50% at 50% 40%, rgba(74,158,255,0.07) 0%, transparent 70%);
+      pointer-events: none;
+    }
 
     #card {
-      width: 340px; padding: 28px 24px 24px;
+      width: 380px;
+      padding: 36px 32px 28px;
+      position: relative;
+      animation: fadeUp 0.35s ease both;
     }
 
-    h2 { margin: 0 0 4px; }
-    .subtitle { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
-
-    .tab-row { display: flex; gap: 6px; margin-bottom: 18px; }
-    .tab {
-      flex: 1; padding: 7px; background: var(--bg-item);
-      border: 1.5px solid var(--border-dim); border-radius: var(--radius-btn);
-      color: var(--text-mid); font-size: 13px; font-family: inherit;
-      cursor: pointer; transition: all 0.12s; text-align: center;
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
-    .tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
-    .field { margin-bottom: 12px; }
-    label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
-    input[type=email], input[type=password] {
+    .brand { margin-bottom: 28px; }
+    .brand h1 {
+      font-size: 22px; font-weight: 700;
+      color: var(--text-primary); letter-spacing: 0.01em;
+      margin-bottom: 4px;
+    }
+    .brand p {
+      font-size: 13px; color: var(--text-dim);
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .view-title {
+      font-size: 15px; font-weight: 600;
+      color: var(--text-high); margin-bottom: 18px;
+    }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: block; font-size: 11px;
+      color: var(--text-dim); margin-bottom: 5px;
+      text-transform: uppercase; letter-spacing: 0.07em;
+    }
+    .field input {
       width: 100%; box-sizing: border-box;
       background: var(--bg-item); border: 1.5px solid var(--border-dim);
       color: var(--text-primary); border-radius: var(--radius-input);
-      padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none;
+      padding: 9px 11px; font-size: 13px; font-family: inherit; outline: none;
+      transition: border-color 0.12s;
     }
-    input:focus { border-color: var(--accent); }
-    input::placeholder { color: var(--text-dim); }
+    .field input:focus { border-color: var(--accent); }
+    .field input::placeholder { color: var(--text-faint); }
 
-    #error { font-size: 12px; color: #e06060; min-height: 16px; margin-bottom: 8px; }
+    #error-login, #error-register {
+      font-size: 12px; color: #e07070;
+      min-height: 15px; margin-bottom: 10px;
+    }
 
-    #back-link { display: block; text-align: center; margin-top: 14px; font-size: 12px; color: var(--text-dim); text-decoration: none; }
-    #back-link:hover { color: var(--text-mid); }
+    /* Forgot password link inline under password field */
+    .forgot-row {
+      display: flex; justify-content: flex-end;
+      margin-top: -8px; margin-bottom: 14px;
+    }
+    .forgot-link {
+      font-size: 11px; color: var(--text-dim);
+      cursor: pointer; text-decoration: none;
+      transition: color 0.12s;
+    }
+    .forgot-link:hover { color: var(--accent); }
+
+    /* Bottom switch link */
+    .switch-row {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .switch-link {
+      color: var(--accent); cursor: pointer;
+      text-decoration: none; font-weight: 500;
+    }
+    .switch-link:hover { text-decoration: underline; }
+
+    /* Back-to-map link */
+    .back-row {
+      text-align: center; margin-top: 10px;
+    }
+    .back-row a {
+      font-size: 11px; color: var(--text-faint);
+      text-decoration: none; transition: color 0.12s;
+    }
+    .back-row a:hover { color: var(--text-mid); }
+
+    /* Reset password info box */
+    .info-box {
+      background: var(--bg-item);
+      border: 1px solid var(--border-dim);
+      border-radius: 7px;
+      padding: 16px 14px;
+      margin-bottom: 18px;
+    }
+    .info-box p {
+      font-size: 13px; color: var(--text-mid); line-height: 1.65; margin-bottom: 10px;
+    }
+    .info-box p:last-child { margin-bottom: 0; }
+    .info-box a {
+      color: var(--accent); text-decoration: none;
+    }
+    .info-box a:hover { text-decoration: underline; }
+    .info-tag {
+      display: inline-block;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-dim);
+      background: var(--border-dim); border-radius: 3px;
+      padding: 2px 6px; margin-bottom: 10px;
+    }
   </style>
 </head>
 <body>
 <div id="card" class="panel">
-  <h2>Heart on a Sleeve</h2>
-  <p class="subtitle">Sign in to save and manage your designs</p>
 
-  <div class="tab-row">
-    <button class="tab active" id="tab-login">Login</button>
-    <button class="tab"        id="tab-register">Register</button>
+  <div class="brand">
+    <h1>Heart on a Sleeve</h1>
+    <p>Map-based merchandise design</p>
   </div>
 
-  <div class="field">
-    <label>Email</label>
-    <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
-  </div>
-  <div class="field">
-    <label>Password</label>
-    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+  <!-- ── Login view ── -->
+  <div class="view active" id="view-login">
+    <div class="view-title">Sign in to your account</div>
+
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="forgot-row">
+      <span class="forgot-link" id="show-reset">Forgot your password?</span>
+    </div>
+
+    <div id="error-login"></div>
+    <button class="btn-primary" id="login-btn">Sign in</button>
+
+    <div class="switch-row">
+      Don't have an account?
+      <span class="switch-link" id="go-register">Create one</span>
+    </div>
+    <div class="back-row"><a href="/">← Back to map</a></div>
   </div>
 
-  <div id="error"></div>
-  <button class="btn-primary" id="submit-btn">Login</button>
-  <a href="/" id="back-link">← Back to map</a>
+  <!-- ── Register view ── -->
+  <div class="view" id="view-register">
+    <div class="view-title">Create an account</div>
+
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password <span style="color:var(--text-faint);font-size:10px;">(8+ characters)</span></label>
+      <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password">
+    </div>
+
+    <div id="error-register"></div>
+    <button class="btn-primary" id="register-btn">Create account</button>
+
+    <div class="switch-row">
+      Already have an account?
+      <span class="switch-link" id="go-login">Sign in</span>
+    </div>
+    <div class="back-row"><a href="/">← Back to map</a></div>
+  </div>
+
+  <!-- ── Reset password view ── -->
+  <div class="view" id="view-reset">
+    <div class="view-title">Reset your password</div>
+
+    <div class="info-box">
+      <div class="info-tag">App in development</div>
+      <p>
+        Automated password reset isn't available yet — Heart on a Sleeve is still being built.
+      </p>
+      <p>
+        If you need your password reset, email Stuart directly:<br>
+        <a href="mailto:stuart.john.atkinson@gmail.com">stuart.john.atkinson@gmail.com</a>
+      </p>
+    </div>
+
+    <button class="btn-primary" id="reset-back-btn">← Back to sign in</button>
+  </div>
+
 </div>
 
 <script>
 const params   = new URLSearchParams(location.search);
 const returnTo = params.get('returnTo') || '/';
-let mode = 'login';
 
-document.getElementById('tab-login').addEventListener('click', () => setMode('login'));
-document.getElementById('tab-register').addEventListener('click', () => setMode('register'));
-
-function setMode(m) {
-  mode = m;
-  document.getElementById('tab-login').classList.toggle('active', m === 'login');
-  document.getElementById('tab-register').classList.toggle('active', m === 'register');
-  document.getElementById('submit-btn').textContent = m === 'login' ? 'Login' : 'Create account';
-  document.getElementById('error').textContent = '';
-  document.getElementById('password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+function show(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
 }
 
-document.getElementById('submit-btn').addEventListener('click', submit);
-document.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+document.getElementById('go-register').addEventListener('click', () => {
+  clearErrors();
+  show('view-register');
+});
+document.getElementById('go-login').addEventListener('click', () => {
+  clearErrors();
+  show('view-login');
+});
+document.getElementById('show-reset').addEventListener('click', () => show('view-reset'));
+document.getElementById('reset-back-btn').addEventListener('click', () => show('view-login'));
 
-async function submit() {
-  const email    = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
-  const errorEl  = document.getElementById('error');
-  const btn      = document.getElementById('submit-btn');
+function clearErrors() {
+  document.getElementById('error-login').textContent    = '';
+  document.getElementById('error-register').textContent = '';
+}
 
-  if (!email || !password) { errorEl.textContent = 'Email and password required.'; return; }
+// ── Submit handlers ──
 
-  btn.disabled = true;
-  btn.textContent = mode === 'login' ? 'Logging in…' : 'Creating account…';
-  errorEl.textContent = '';
+document.getElementById('login-btn').addEventListener('click', doLogin);
+document.getElementById('register-btn').addEventListener('click', doRegister);
 
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const active = document.querySelector('.view.active');
+  if (active?.id === 'view-login')    doLogin();
+  if (active?.id === 'view-register') doRegister();
+});
+
+async function apiCall(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await resp.json(); } catch { /* non-JSON body */ }
+  if (!resp.ok) throw new Error(data.detail || `Server error (${resp.status})`);
+  return data;
+}
+
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errorEl  = document.getElementById('error-login');
+  const btn      = document.getElementById('login-btn');
+
+  if (!email || !password) { errorEl.textContent = 'Email and password are required.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Signing in…'; errorEl.textContent = '';
   try {
-    const resp = await fetch(`/api/auth/${mode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) { throw new Error(data.detail || `Server ${resp.status}`); }
-    localStorage.setItem('hoas_token', data.access_token);
-    localStorage.setItem('hoas_refresh', data.refresh_token);
-    localStorage.setItem('hoas_email', data.email);
+    const data = await apiCall('/api/auth/login', { email, password });
+    storeTokens(data);
     window.location.href = returnTo;
   } catch (e) {
     errorEl.textContent = e.message;
-    btn.disabled = false;
-    btn.textContent = mode === 'login' ? 'Login' : 'Create account';
+    btn.disabled = false; btn.textContent = 'Sign in';
   }
+}
+
+async function doRegister() {
+  const email    = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const errorEl  = document.getElementById('error-register');
+  const btn      = document.getElementById('register-btn');
+
+  if (!email || !password) { errorEl.textContent = 'Email and password are required.'; return; }
+  if (password.length < 8) { errorEl.textContent = 'Password must be at least 8 characters.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Creating account…'; errorEl.textContent = '';
+  try {
+    const data = await apiCall('/api/auth/register', { email, password });
+    storeTokens(data);
+    window.location.href = returnTo;
+  } catch (e) {
+    errorEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Create account';
+  }
+}
+
+function storeTokens(data) {
+  localStorage.setItem('hoas_token',   data.access_token);
+  localStorage.setItem('hoas_refresh', data.refresh_token);
+  localStorage.setItem('hoas_email',   data.email);
 }
 </script>
 </body>

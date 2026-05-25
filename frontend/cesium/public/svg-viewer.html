@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8"/>
   <title>Heart on a Sleeve — SVG Preview</title>
+  <script>
+    if (!localStorage.getItem('hoas_token')) {
+      location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
+    }
+  </script>
   <link rel="stylesheet" href="/app.css">
   <style>
     @keyframes page-reveal {

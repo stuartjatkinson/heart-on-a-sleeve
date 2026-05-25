@@ -1,8 +1,9 @@
-import asyncio
+import math
 import time
 import httpx
 from datetime import datetime
 from ..models.schemas import BBox
+from ..timing_utils import tlog
 
 
 class OverpassError(Exception):
@@ -12,20 +13,19 @@ class OverpassError(Exception):
         self.status_code = status_code
 
 
-# Mirror endpoints tried in order on failure
-_ENDPOINTS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-]
+# Mirror tried once if the primary endpoint returns a transient error
+_MIRROR = "https://overpass.kumi.systems/api/interpreter"
 
 
 class OSMFetcher:
-    """Fetches OSM data via Overpass API with retry + fallback."""
+    """Fetches OSM data via Overpass API with a single-shot mirror fallback."""
 
     def __init__(self, overpass_endpoint: str):
-        self.primary_endpoint = overpass_endpoint
-        # Put the configured endpoint first, then any mirrors not already listed
-        self._endpoints = [overpass_endpoint] + [e for e in _ENDPOINTS if e != overpass_endpoint]
+        self.endpoint = overpass_endpoint
+        # Primary first, then mirror (each tried exactly once — no retry loops)
+        self._endpoints = [overpass_endpoint] + (
+            [_MIRROR] if overpass_endpoint != _MIRROR else []
+        )
         self._cache: dict[tuple, tuple[dict, float]] = {}
         self._cache_ttl = 300  # 5-minute TTL so colour regens are instant
 
@@ -56,47 +56,54 @@ class OSMFetcher:
         out skel qt;
         """
         headers = {"User-Agent": "heart-on-a-sleeve/1.0", "Accept": "*/*"}
+        cos_lat = math.cos((bbox.south + bbox.north) / 2 * math.pi / 180)
+        km2 = round((bbox.east - bbox.west) * cos_lat * 111.32 * (bbox.north - bbox.south) * 111.32, 2)
+
         last_error: OverpassError | None = None
-
         for endpoint in self._endpoints:
-            for attempt in range(2):  # 2 attempts per endpoint before trying next
-                if attempt > 0:
-                    await asyncio.sleep(3)
-                try:
-                    async with httpx.AsyncClient(
-                        timeout=httpx.Timeout(connect=10, read=timeout + 5, write=10, pool=5),
-                        headers=headers,
-                    ) as client:
-                        response = await client.post(endpoint, data={"data": query})
+            try:
+                t0 = time.perf_counter()
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10, read=timeout + 5, write=10, pool=5),
+                    headers=headers,
+                ) as client:
+                    response = await client.post(endpoint, data={"data": query})
 
-                    if response.status_code == 429:
-                        last_error = OverpassError(
-                            "Overpass rate limit — wait a moment and try again", 429)
-                        await asyncio.sleep(5)
-                        continue
-                    if response.status_code in (503, 504):
-                        last_error = OverpassError(
-                            f"Overpass service unavailable ({response.status_code})", response.status_code)
-                        continue
-                    if not response.is_success:
-                        last_error = OverpassError(
-                            f"Overpass returned HTTP {response.status_code}", response.status_code)
-                        break  # non-transient — skip remaining attempts on this endpoint
+                elapsed_ms = (time.perf_counter() - t0) * 1000
 
-                    data = response.json()
-                    self._cache[key] = (data, time.time())
-                    return data
-
-                except httpx.TimeoutException:
+                # Transient server errors — try next endpoint
+                if response.status_code in (429, 503, 504):
                     last_error = OverpassError(
-                        f"Overpass timed out after {timeout}s — try a smaller area", 504)
-                except httpx.ConnectError:
-                    last_error = OverpassError(
-                        "Cannot reach Overpass API — check network connection", 503)
-                except httpx.HTTPError as e:
-                    last_error = OverpassError(f"Overpass network error: {e}", 502)
+                        f"Overpass {response.status_code} from {endpoint[-20:]}", response.status_code)
+                    tlog("overpass_transient", elapsed_ms,
+                         f"status={response.status_code} ep={endpoint[-20:]} km2={km2}")
+                    continue
 
-        raise last_error or OverpassError("Overpass fetch failed after retries", 502)
+                # Non-transient HTTP error — don't bother trying mirrors
+                if not response.is_success:
+                    raise OverpassError(
+                        f"Overpass returned HTTP {response.status_code}", response.status_code)
+
+                data = response.json()
+                tlog("overpass_fetch", elapsed_ms,
+                     f"km2={km2} elements={len(data.get('elements', []))} ep={endpoint[-20:]}")
+                self._cache[key] = (data, time.time())
+                return data
+
+            except httpx.TimeoutException:
+                last_error = OverpassError(
+                    f"Overpass timed out after {timeout}s — try a smaller area", 504)
+                tlog("overpass_timeout", (time.perf_counter() - t0) * 1000,
+                     f"ep={endpoint[-20:]} km2={km2}")
+            except httpx.ConnectError:
+                last_error = OverpassError(
+                    "Cannot reach Overpass API — check network connection", 503)
+            except OverpassError:
+                raise
+            except httpx.HTTPError as e:
+                last_error = OverpassError(f"Overpass network error: {e}", 502)
+
+        raise last_error or OverpassError("Overpass fetch failed", 502)
 
     async def get_license_info(self, bbox: BBox) -> dict:
         return {

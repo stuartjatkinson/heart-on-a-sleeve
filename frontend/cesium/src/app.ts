@@ -606,139 +606,234 @@ function drawProgressBar(
 
 async function runTransition(
   svgP: Promise<any>,
-  stlP: Promise<any>,
   estimatedMs = 6_000,
-): Promise<[any, any]> {
+): Promise<any> {
+  const ov  = document.getElementById('transition-overlay') as HTMLCanvasElement;
+  const ctx = ov.getContext('2d')!;
+  const W = window.innerWidth, H = window.innerHeight;
+  ov.width = W; ov.height = H;
+
+  ov.style.display = 'block';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  let frame: HTMLImageElement | null = null;
+  try {
+    viewer.render();
+    frame = await loadImg((viewer.scene.canvas as HTMLCanvasElement).toDataURL('image/jpeg', 0.85));
+  } catch { }
+  _transFrame = frame;
+
+  const sel = getSelAabb();
+  _transSel = sel;
+  const fitBounds = getSvgViewerFitBounds(W, H, MERCH_RATIO[merchType] ?? 1);
+  _transFitBounds = fitBounds;
+
+  const PEAK_DIV = 20;
+  const sx = sel?.x ?? 0, sy = sel?.y ?? 0, sw = sel?.w ?? W, sh = sel?.h ?? H;
+
+  // Full-res snapshot of the selection area — downsampled per-frame for pixelation
+  const selSnap = document.createElement('canvas');
+  selSnap.width  = Math.max(1, Math.round(sw));
+  selSnap.height = Math.max(1, Math.round(sh));
+  if (frame) {
+    const sCtx = selSnap.getContext('2d')!;
+    if (sel) sCtx.drawImage(frame, sx, sy, sw, sh, 0, 0, sw, sh);
+    else     sCtx.drawImage(frame, 0, 0, W, H);
+  }
+
+  // Peak-pixelated selection snapshot kept for reverse transition
+  const pixCanvas = document.createElement('canvas');
+  pixCanvas.width  = Math.max(1, Math.round(sw / PEAK_DIV));
+  pixCanvas.height = Math.max(1, Math.round(sh / PEAK_DIV));
+  if (frame) {
+    const pc = pixCanvas.getContext('2d')!;
+    if (sel) pc.drawImage(frame, sx, sy, sw, sh, 0, 0, pixCanvas.width, pixCanvas.height);
+    else     pc.drawImage(frame, 0, 0, W, H, 0, 0, pixCanvas.width, pixCanvas.height);
+  }
+  _transPixCanvas = pixCanvas;
+
+  let svgDone = false, svgResult: any = null, svgError: any = null;
+  svgP.then(r => { svgResult = r; }).catch(e => { svgError = e; }).finally(() => { svgDone = true; });
+
+  const scratch = document.createElement('canvas');
+  const scratchCtx = scratch.getContext('2d')!;
+
+  const BAR_H = 4, BAR_Y = H - 44, BAR_X = Math.round(W * 0.15), BAR_W = Math.round(W * 0.70);
+  // Time constant for asymptotic approach — animation stays in perpetual motion
+  const TAU = 2_200;
+  const t0 = performance.now();
+
+  await new Promise<void>(resolve => {
+    function loop(ts: number) {
+      const elapsed = ts - t0;
+      // Single t (0→1) drives both zoom position and pixelation simultaneously
+      const t = 1 - Math.exp(-elapsed / TAU);
+
+      // Dest rect interpolated sel → fitBounds
+      const dx = sx + (fitBounds.x - sx) * t;
+      const dy = sy + (fitBounds.y - sy) * t;
+      const dw = sw + (fitBounds.w - sw) * t;
+      const dh = sh + (fitBounds.h - sh) * t;
+
+      // Block size: 1 (sharp) at t=0 → PEAK_DIV (blocky) at t=1
+      const blockSize = 1 + (PEAK_DIV - 1) * t;
+      const bW = Math.max(1, Math.round(sw / blockSize));
+      const bH = Math.max(1, Math.round(sh / blockSize));
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#0d0e12';
+      ctx.fillRect(0, 0, W, H);
+
+      if (frame) {
+        // Full globe frame fades out as t crosses 0→0.3
+        const fadeAlpha = Math.max(0, 1 - t / 0.3);
+        if (fadeAlpha > 0) {
+          ctx.globalAlpha = fadeAlpha;
+          ctx.drawImage(frame, 0, 0, W, H);
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // Selection snapshot: zooms from sel to fitBounds, pixelates as t grows
+      if (scratch.width !== bW || scratch.height !== bH) {
+        scratch.width = bW; scratch.height = bH;
+      }
+      scratchCtx.drawImage(selSnap, 0, 0, bW, bH);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(scratch, 0, 0, bW, bH, dx, dy, dw, dh);
+      ctx.imageSmoothingEnabled = true;
+
+      const prog = svgDone ? 1 : Math.min(0.95, elapsed / Math.max(1, estimatedMs));
+      drawProgressBar(ctx, BAR_X, BAR_Y, BAR_W, BAR_H, prog);
+
+      if (svgDone && t >= 0.82) { resolve(); return; }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  });
+
+  if (svgError) throw svgError;
+
+  const svgImg = await loadImg(svgResult.svg_url);
+  _transSvgImg = svgImg;
+
+  // Dissolve: peak-pixelated sel at fitBounds → SVG at fitBounds (550 ms)
+  await animPhase(550, dissolveT => {
+    const ease = 1 - Math.pow(1 - dissolveT, 3);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1 - ease;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(pixCanvas, 0, 0, pixCanvas.width, pixCanvas.height, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = 1;
+    ctx.globalAlpha = ease;
+    ctx.drawImage(svgImg, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+    ctx.globalAlpha = 1;
+  });
+
+  return svgResult;
+}
+
+async function runReverseTransition(): Promise<void> {
+  if (!_transSvgImg || !_transFitBounds) return;
+
   const ov  = document.getElementById('transition-overlay') as HTMLCanvasElement;
   const ctx = ov.getContext('2d')!;
   const W = window.innerWidth, H = window.innerHeight;
   ov.width = W; ov.height = H;
   ov.style.display = 'block';
 
-  let frame: HTMLImageElement | null = null;
-  try {
-    viewer.render();
-    frame = await loadImg((viewer.scene.canvas as HTMLCanvasElement).toDataURL('image/jpeg', 0.85));
-  } catch { /* canvas capture failed */ }
+  const fitBounds = _transFitBounds;
+  const sel = _transSel;
+  const frame = _transFrame;
+  const pixCanvas = _transPixCanvas;
+  const svgImg = _transSvgImg!;
+  const PEAK_DIV = 20;
 
-  const sel = getSelAabb();
+  const sx = sel?.x ?? 0, sy = sel?.y ?? 0, sw = sel?.w ?? W, sh = sel?.h ?? H;
 
+  // Phase R1: SVG fades out, peak-pixelated selection fades in at fitBounds (400 ms)
+  await animPhase(400, t => {
+    const ease = 1 - Math.pow(1 - t, 3);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
+    if (pixCanvas) {
+      ctx.globalAlpha = ease;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(pixCanvas, 0, 0, pixCanvas.width, pixCanvas.height, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = 1 - ease;
+    ctx.drawImage(svgImg, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
+    ctx.globalAlpha = 1;
+  });
+
+  // Phase R2: reverse zoom — fitBounds → sel, sharpening as t drops (same TAU, mirrored)
+  const selSnap = document.createElement('canvas');
+  selSnap.width  = Math.max(1, Math.round(sw));
+  selSnap.height = Math.max(1, Math.round(sh));
   if (frame) {
-    // Phase 1: darken outside selection (200 ms)
-    await animPhase(200, t => drawTransFrame(ctx, frame!, W, H, sel, t * 0.78, 0));
-    // Phase 2: pixelate selection (200 ms, block 20→2)
-    await animPhase(200, t => drawTransFrame(ctx, frame!, W, H, sel, 0.78, Math.max(2, Math.round(20 - 18 * t))));
-  } else {
-    ov.style.background = '#000';
-    await animPhase(300, t => { ctx.fillStyle = `rgba(0,0,0,${t * 0.85})`; ctx.fillRect(0, 0, W, H); });
+    const sCtx = selSnap.getContext('2d')!;
+    if (sel) sCtx.drawImage(frame, sx, sy, sw, sh, 0, 0, sw, sh);
+    else     sCtx.drawImage(frame, 0, 0, W, H);
   }
 
-  // Pre-render pixelated selection into offscreen canvas
-  let pixCanvas: HTMLCanvasElement | null = null;
-  if (frame && sel) {
-    pixCanvas = document.createElement('canvas');
-    pixCanvas.width  = Math.max(1, Math.round(sel.w / 2));
-    pixCanvas.height = Math.max(1, Math.round(sel.h / 2));
-    pixCanvas.getContext('2d')!.drawImage(frame, sel.x, sel.y, sel.w, sel.h, 0, 0, pixCanvas.width, pixCanvas.height);
-  }
+  const scratch = document.createElement('canvas');
+  const scratchCtx = scratch.getContext('2d')!;
+  const TAU_REV = 1_600;
+  const t0 = performance.now();
 
-  // bothDone fires on both success and error so the loop always exits
-  let bothDone = false;
-  let bothResult: [any, any] | null = null;
-  let bothError: any = null;
-  Promise.all([svgP, stlP])
-    .then(r  => { bothResult = r as [any, any]; })
-    .catch(e => { bothError  = e; })
-    .finally(() => { bothDone = true; });
-
-  // Fit-bounds computed upfront so phase 3 can zoom toward the final position
-  const fitBounds = getSvgViewerFitBounds(W, H, MERCH_RATIO[merchType] ?? 1);
-
-  // Phase 3: pixelated selection zooms toward fitBounds while waiting for data
-  const tau = Math.max(1_000, estimatedMs / 3);
-  const trailStart = performance.now();
-  const BAR_H = 4, BAR_Y = H - 44, BAR_X = Math.round(W * 0.15), BAR_W = Math.round(W * 0.70);
-  let zoomT = 0;
   await new Promise<void>(resolve => {
-    function loop(now: number) {
-      const elapsed = now - trailStart;
-      zoomT = 0.9 * (1 - Math.exp(-elapsed / tau));
-      ctx.clearRect(0, 0, W, H);
+    function loop(ts: number) {
+      const elapsed = ts - t0;
+      // t runs 1→0: blocky/fitBounds at start, sharp/sel at end
+      const t = Math.exp(-elapsed / TAU_REV);
 
-      if (sel && pixCanvas) {
-        const dx = sel.x + (fitBounds.x - sel.x) * zoomT;
-        const dy = sel.y + (fitBounds.y - sel.y) * zoomT;
-        const dw = sel.w + (fitBounds.w - sel.w) * zoomT;
-        const dh = sel.h + (fitBounds.h - sel.h) * zoomT;
-        // Keep the Cesium frame visible + dark vignette that follows the moving selection
-        if (frame) {
+      const dx = sx + (fitBounds.x - sx) * t;
+      const dy = sy + (fitBounds.y - sy) * t;
+      const dw = sw + (fitBounds.w - sw) * t;
+      const dh = sh + (fitBounds.h - sh) * t;
+
+      const blockSize = 1 + (PEAK_DIV - 1) * t;
+      const bW = Math.max(1, Math.round(sw / blockSize));
+      const bH = Math.max(1, Math.round(sh / blockSize));
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
+
+      if (frame) {
+        // Full globe fades back in as t drops below 0.3
+        const fadeAlpha = Math.max(0, 1 - t / 0.3);
+        if (fadeAlpha > 0) {
+          ctx.globalAlpha = fadeAlpha;
           ctx.drawImage(frame, 0, 0, W, H);
-          ctx.fillStyle = 'rgba(0,0,0,0.78)';
-          ctx.fillRect(0, 0, W, dy);
-          ctx.fillRect(0, dy, dx, dh);
-          ctx.fillRect(dx + dw, dy, W - dx - dw, dh);
-          ctx.fillRect(0, dy + dh, W, H - dy - dh);
-        } else {
-          ctx.fillStyle = '#000';
-          ctx.fillRect(0, 0, W, H);
+          ctx.globalAlpha = 1;
         }
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(pixCanvas, dx, dy, dw, dh);
-        ctx.imageSmoothingEnabled = true;
-      } else {
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, W, H);
       }
 
-      drawProgressBar(ctx, BAR_X, BAR_Y, BAR_W, BAR_H, zoomT / 0.9);
-      if (bothDone && elapsed >= 300) { resolve(); return; }
+      if (scratch.width !== bW || scratch.height !== bH) {
+        scratch.width = bW; scratch.height = bH;
+      }
+      scratchCtx.drawImage(selSnap, 0, 0, bW, bH);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(scratch, 0, 0, bW, bH, dx, dy, dw, dh);
+      ctx.imageSmoothingEnabled = true;
+
+      if (t <= 0.08) { resolve(); return; }
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
   });
 
-  if (bothError) throw bothError;
-  const [svgResult, stlResult] = bothResult!;
-  const svgImg = await loadImg(svgResult.svg_url);
-
-  // Phase 4: snap remaining gap to exact fitBounds (200 ms)
-  const zoomAtSettle = zoomT;
-  await animPhase(200, t => {
-    const ease = 1 - Math.pow(1 - t, 3);
-    const z = zoomAtSettle + (1 - zoomAtSettle) * ease;
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#0d0e12';
-    ctx.fillRect(0, 0, W, H);
-    if (sel && pixCanvas) {
-      const dx = sel.x + (fitBounds.x - sel.x) * z;
-      const dy = sel.y + (fitBounds.y - sel.y) * z;
-      const dw = sel.w + (fitBounds.w - sel.w) * z;
-      const dh = sel.h + (fitBounds.h - sel.h) * z;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(pixCanvas, dx, dy, dw, dh);
-      ctx.imageSmoothingEnabled = true;
-    }
-  });
-
-  // Phase 5: cross-dissolve pixelated → SVG at fit bounds (500 ms)
-  await animPhase(500, t => {
-    const ease = 1 - Math.pow(1 - t, 3);
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = '#0d0e12';
-    ctx.fillRect(0, 0, W, H);
-    if (pixCanvas) {
-      ctx.globalAlpha = 1 - ease;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(pixCanvas, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
-      ctx.imageSmoothingEnabled = true;
-      ctx.globalAlpha = 1;
-    }
-    ctx.globalAlpha = ease;
-    ctx.drawImage(svgImg, fitBounds.x, fitBounds.y, fitBounds.w, fitBounds.h);
-    ctx.globalAlpha = 1;
-  });
-
-  return [svgResult, stlResult];
+  ov.style.transition = 'opacity 0.25s';
+  ov.style.opacity = '0';
+  await new Promise(r => setTimeout(r, 250));
+  ov.style.display = 'none';
+  ov.style.opacity = '1';
+  ov.style.transition = '';
 }
 
 // ---------------------------------------------------------------------------
@@ -764,8 +859,16 @@ let svgNatW = 0, svgNatH = 0, svgTx = 0, svgTy = 0, svgScl = 1;
 let svgCurrentUrl = '';
 let svgCurrentStl: any = null;
 let svgRegenTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Saved forward-transition state — used to drive the reverse animation
+let _transFrame: HTMLImageElement | null = null;
+let _transSel: ReturnType<typeof getSelAabb> = null;
+let _transPixCanvas: HTMLCanvasElement | null = null;
+let _transFitBounds: { x: number; y: number; w: number; h: number } | null = null;
+let _transSvgImg: HTMLImageElement | null = null;
 let svgRegenAbort: AbortController | null = null;
 let _cachedOsmData: { elements?: Record<string, unknown>[] } | null = null;
+let _cachedSvgResult: { svg_url: string; svgText: string } | null = null;
 let svgCurrentText = '';
 
 const svgView    = document.getElementById('svg-view')!;
@@ -899,13 +1002,35 @@ async function openSvgView(url: string, text: string, stlResult: any) {
 }
 
 // ── SVG viewer event listeners ────────────────────────────────────────────────
-document.getElementById('btn-back')!.addEventListener('click', () => {
+document.getElementById('btn-back')!.addEventListener('click', async () => {
   svgView.style.display = 'none';
+  const panel = document.getElementById('panel')!;
+  panel.style.visibility = 'visible';
+  await runReverseTransition();
   genBtn.disabled = false;
-  genBtn.onclick = generate;
-  (document.getElementById('btn-text') as HTMLElement).textContent = 'Generate Design';
+  genBtn.onclick = _cachedSvgResult ? showCachedSvg : generate;
+  (document.getElementById('btn-text') as HTMLElement).textContent = _cachedSvgResult ? 'View SVG →' : 'Generate Design';
   (document.getElementById('spinner') as HTMLElement).style.display = 'none';
 });
+
+async function showCachedSvg(): Promise<void> {
+  if (!_cachedSvgResult) return;
+  const panel = document.getElementById('panel')!;
+  panel.style.visibility = 'hidden';
+  try {
+    const svgResult = await runTransition(Promise.resolve(_cachedSvgResult), 0);
+    await openSvgView(svgResult.svg_url, svgResult.svgText, svgCurrentStl);
+    const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
+    ov.style.transition = 'opacity 0.3s';
+    ov.style.opacity = '0';
+    await new Promise(r => setTimeout(r, 300));
+    ov.style.display = 'none';
+    ov.style.opacity = '1';
+    ov.style.transition = '';
+  } catch {
+    panel.style.visibility = '';
+  }
+}
 
 document.getElementById('svg-btn-fit')!.addEventListener('click', svgFit);
 document.getElementById('svg-btn-100')!.addEventListener('click', () => {
@@ -926,22 +1051,35 @@ document.getElementById('svg-tog-buildings')!.addEventListener('click', function
   svgScheduleRegen();
 });
 
-svg3dBtn.addEventListener('click', () => {
+svg3dBtn.addEventListener('click', async () => {
   if (!confirmed) return;
   const bbox = rotSelAabb(confirmed);
   svgVp.classList.add('tilt-away');
-  setTimeout(() => {
-    const p = new URLSearchParams({
-      svg: svgCurrentUrl,
-      west: String(bbox.west), south: String(bbox.south),
-      east: String(bbox.east), north: String(bbox.north),
-      merch: merchType, coaster_shape: coasterShape,
-    });
-    if (svgCurrentStl?.stl_buildings_url) p.set('stl_buildings', svgCurrentStl.stl_buildings_url);
-    if (svgCurrentStl?.stl_land_url)      p.set('stl_land',      svgCurrentStl.stl_land_url);
-    if (svgCurrentStl?.stl_water_url)     p.set('stl_water',     svgCurrentStl.stl_water_url);
-    window.location.href = `/3d-viewer.html?${p}`;
-  }, 650);
+
+  // Blob URLs die on page navigation — persist to server first so 3D viewer can load it
+  let svgParamUrl = svgCurrentUrl;
+  if (svgCurrentText && svgCurrentUrl.startsWith('blob:')) {
+    try {
+      const r = await fetch('/api/save-svg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ svg_text: svgCurrentText }),
+      });
+      if (r.ok) svgParamUrl = (await r.json()).svg_url;
+    } catch { /* fall through with blob url */ }
+  }
+
+  await new Promise(r => setTimeout(r, 650));
+  const p = new URLSearchParams({
+    svg: svgParamUrl,
+    west: String(bbox.west), south: String(bbox.south),
+    east: String(bbox.east), north: String(bbox.north),
+    merch: merchType, coaster_shape: coasterShape,
+  });
+  if (svgCurrentStl?.stl_buildings_url) p.set('stl_buildings', svgCurrentStl.stl_buildings_url);
+  if (svgCurrentStl?.stl_land_url)      p.set('stl_land',      svgCurrentStl.stl_land_url);
+  if (svgCurrentStl?.stl_water_url)     p.set('stl_water',     svgCurrentStl.stl_water_url);
+  window.location.href = `/3d-viewer.html?${p}`;
 });
 
 // Pan/zoom on SVG viewport
@@ -977,16 +1115,29 @@ window.addEventListener('mouseup', () => {
 // ---------------------------------------------------------------------------
 const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
 
+function tPost(label: string, ms: number, extra = '') {
+  fetch('/api/timing', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, ms, extra }) }).catch(() => {});
+}
+
 async function generate(): Promise<void> {
   if (!confirmed) return;
   const bbox   = rotSelAabb(confirmed);
   const spinner = document.getElementById('spinner')!;
   const btnText = document.getElementById('btn-text')!;
   const status  = document.getElementById('status')!;
+  const panel   = document.getElementById('panel')!;
 
   genBtn.disabled = true; genBtn.onclick = null;
   spinner.style.display = 'block';
   btnText.textContent = 'Generating…'; status.textContent = '';
+  panel.style.visibility = 'hidden';
+
+  const _t0 = performance.now();
+  const _cosLat = Math.cos((bbox.south + bbox.north) / 2 * Math.PI / 180);
+  const _km2 = Math.round((bbox.east - bbox.west) * _cosLat * 111.32 * (bbox.north - bbox.south) * 111.32 * 100) / 100;
+  const _area = `km2=${_km2}`;
+  tPost('generate_start', 0, _area);
 
   const abort = new AbortController();
   setTimeout(() => abort.abort(), 90_000);
@@ -1008,6 +1159,7 @@ async function generate(): Promise<void> {
   }
 
   const bboxArr: [number, number, number, number] = [bbox.west, bbox.south, bbox.east, bbox.north];
+  tPost('osm_request_start', performance.now() - _t0, _area);
   const osmP = fetch(`/api/osm/features?${new URLSearchParams({
     west: String(bbox.west), south: String(bbox.south),
     east: String(bbox.east), north: String(bbox.north),
@@ -1020,22 +1172,33 @@ async function generate(): Promise<void> {
       return r.json();
     })
     .then((osmData: { elements?: Record<string, unknown>[] }) => {
+      tPost('osm_data_received', performance.now() - _t0, `${_area} elements=${(osmData.elements||[]).length}`);
       _cachedOsmData = osmData;
+      const t1 = performance.now();
       const svgEl = renderSvg({
         osmData, bbox: bboxArr, merchType,
         coasterShape, includeLabels: true, includeBuildings: true,
       });
+      tPost('svg_rendered', performance.now() - _t0, `${_area} render=${Math.round(performance.now()-t1)}ms`);
       return { svg_url: svgToBlobUrl(svgEl), svgText: svgToString(svgEl) };
     });
 
-  const stlP = fetchJson('/api/generate/stl', {
-    bbox, merch_type: merchType, coaster_shape: coasterShape,
-  }).catch(() => ({}));
+  // Fire STL only after OSM data is cached — avoids a simultaneous double-Overpass hit
+  osmP.then(() => {
+    fetchJson('/api/generate/stl', {
+      bbox, merch_type: merchType, coaster_shape: coasterShape,
+    }).then((r: any) => { svgCurrentStl = r; }).catch(() => { /* ignore */ });
+  }).catch(() => { /* osmP already handles its own error */ });
+
+  // Fly camera to fit the selection in view — runs in parallel with the OSM fetch.
+  // Must complete before runTransition takes the Cesium canvas snapshot.
+  await flyTobbox(bbox.west, bbox.south, bbox.east, bbox.north);
 
   try {
-    const [svgResult, stlResult] = await runTransition(osmP, stlP, estimatedMs);
+    const svgResult = await runTransition(osmP, estimatedMs);
+    _cachedSvgResult = svgResult;
 
-    await openSvgView(svgResult.svg_url, svgResult.svgText, stlResult);
+    await openSvgView(svgResult.svg_url, svgResult.svgText, svgCurrentStl);
 
     const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
     ov.style.transition = 'opacity 0.3s';
@@ -1050,6 +1213,7 @@ async function generate(): Promise<void> {
     ov.style.display = 'none';
     ov.style.opacity = '1';
     ov.style.transition = '';
+    panel.style.visibility = '';
     status.textContent = err.name === 'AbortError' ? 'Timed out — try a smaller area' : `Error: ${err.message}`;
     genBtn.disabled = false; btnText.textContent = 'Retry';
     spinner.style.display = 'none';
@@ -1073,14 +1237,17 @@ document.getElementById('coaster-next')!.addEventListener('click', (e) => { e.st
 // ---------------------------------------------------------------------------
 // Place search — Nominatim OSM geocoder (debounced, 500 ms)
 // ---------------------------------------------------------------------------
-function flyTobbox(west: number, south: number, east: number, north: number): void {
-  const cosLat = Math.cos((south + north) / 2 * Math.PI / 180);
-  const spanM  = Math.max((east - west) * cosLat * 111_320, (north - south) * 111_320);
-  const altM   = Math.max(spanM * 1.4, 2_000);
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2, altM),
-    orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    duration: 1.5,
+function flyTobbox(west: number, south: number, east: number, north: number): Promise<void> {
+  return new Promise(resolve => {
+    const cosLat = Math.cos((south + north) / 2 * Math.PI / 180);
+    const spanM  = Math.max((east - west) * cosLat * 111_320, (north - south) * 111_320);
+    const altM   = Math.max(spanM * 1.4, 2_000);
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees((west + east) / 2, (south + north) / 2, altM),
+      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
+      duration: 1.5,
+      complete: resolve,
+    });
   });
 }
 
@@ -1204,7 +1371,7 @@ function updateUserNav(): void {
         updateUserNav();
       });
     } else {
-      el.innerHTML = `<a href="/login.html" class="btn">⊞ Login / Register</a>`;
+      el.innerHTML = `<a href="/login.html" class="btn">⊞ Sign in</a>`;
     }
   });
 }
