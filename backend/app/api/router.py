@@ -8,6 +8,8 @@ import functools
 import os
 
 from app.core.config import get_settings
+from app.core.database import engine
+from app.models import db_models  # noqa: F401 — registers ORM models with Base.metadata
 from app.models.schemas import (
     BBox,
     MERCH_SPECS,
@@ -36,6 +38,9 @@ os.makedirs(os.path.join(DATA_DIR, "stl_output"), exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.core.database import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
 
 

@@ -2,6 +2,8 @@
 
 ## Open
 
+- [ ] **Cloud Run auth/sign-in broken — database tables never created** — `lifespan` in router.py is empty; no `create_all` or migration runner; Cloud Run doesn't use docker-compose so the PostgreSQL init SQL never runs; Cloud SQL instance and GitHub secrets may also be missing *(found 2026-05-26)*
+
 ## Resolved
 
 - [x] **2D transition zoom starts during progress bar** — `fitBounds` moved before phase 3; loop lerps pixelated sel → fitBounds using same fake-asymptotic curve as the bar; phase 4 snaps remaining gap *(resolved 2026-05-23)*
