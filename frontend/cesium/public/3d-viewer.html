@@ -28,6 +28,12 @@
     #load-msg  { font-size: 11px; color: var(--text-dim); white-space: nowrap; min-width: 140px; }
     #load-bar-wrap { flex: 1; height: 3px; border-radius: 2px; width: auto; }
     #load-bar  { background: linear-gradient(90deg,#4a9eff,#88c4ff); transition: none; }
+    /* SVG cover — keeps the source SVG visible until OSM meshes are built */
+    #svg-cover {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; background: #0d0e12;
+      z-index: 8; transition: opacity 0.7s ease;
+    }
   </style>
 </head>
 <body>
@@ -114,6 +120,7 @@
   </div>
 </div>
 <div id="canvas-wrap">
+  <img id="svg-cover" alt="">
   <div id="loading">
     <div id="load-msg">Initialising…</div>
     <div id="load-bar-wrap"><div id="load-bar"></div></div>
@@ -143,6 +150,10 @@ let stlLand      = p.get('stl_land');
 let stlWater     = p.get('stl_water');
 const svgUrl     = p.get('svg');
 const hasPrintParts = !!(stlBuildings && stlLand && stlWater);
+
+// Show SVG cover immediately — persists until OSM data arrives
+const svgCover = document.getElementById('svg-cover');
+if (svgUrl && svgCover) svgCover.src = svgUrl;
 const is3dPrint  = ['coaster', 'placemat', 'relief', '3d_print'].includes(merch);
 
 // ── Projection ────────────────────────────────────────────────────────────────
@@ -306,7 +317,7 @@ async function applyGroundTexture() {
     });
     tex.colorSpace = THREE.SRGBColorSpace;
     matGround.map = tex;
-    matGround.color.set(0xffffff);
+    matGround.color.set(0x000000); // start invisible — caller fades in
     matGround.needsUpdate = true;
   } catch (e) {
     console.warn('SVG ground texture failed:', e);
@@ -353,7 +364,8 @@ function tickEntry(now) {
     scene.background.set(BG);
     if (scene.fog) scene.fog.color.set(BG);
     document.getElementById('loading').style.display = 'none';
-    if (svgUrl) applyGroundTexture();
+    // Ensure ground is fully visible by end of animation (in case fade-in hasn't finished)
+    if (matGround.map) { matGround.color.set(0xffffff); matGround.needsUpdate = true; }
     // For fabric/transfer types, auto-show the SVG base layer after the entry animation
     if (!is3dPrint && svgUrl && !showingPreview) {
       const btn = document.getElementById('btn-mode');
@@ -407,6 +419,20 @@ let entryReady = false; // set true once meshes are built
   controls.update();
   renderer.render(scene, camera);
 })();
+
+// ── SVG ground texture — start loading immediately, fade in over 2.2 s ───────
+if (svgUrl) {
+  applyGroundTexture().then(() => {
+    const t0 = performance.now();
+    const FADE_MS = 2200;
+    (function fadeGnd(now) {
+      const ease = Math.min(1, (now - t0) / FADE_MS);
+      matGround.color.setRGB(ease, ease, ease);
+      matGround.needsUpdate = true;
+      if (ease < 1) requestAnimationFrame(fadeGnd);
+    })(performance.now());
+  });
+}
 
 // ── Pre-load fake-asymptotic progress bar (0 → 50 %) ─────────────────────────
 const cosLatEst  = Math.cos(cy * Math.PI / 180);
@@ -572,6 +598,8 @@ setStatus('');
 statsEl.textContent = `${nBuildings} buildings · ${nRoads} roads`;
 setLoad('Building scene…');
 entryReady = true; // hand off to tickEntry — bar takes over at 50 %
+// SVG cover has done its job — fade it out now the scene is built
+if (svgCover) { svgCover.style.opacity = '0'; setTimeout(() => svgCover?.remove(), 750); }
 
 // ── Print Preview — load the 3 STL pieces ────────────────────────────────────
 const printGroup  = new THREE.Group();
@@ -590,6 +618,7 @@ const baseplateGroup = new THREE.Group();
 baseplateGroup.visible = false;
 printGroup.add(baseplateGroup);
 const printLayerMats = { buildings: null, water: null, land: null };
+let _watRestLocalY = 0, _lndRestLocalY = 0; // stacking rest positions, set in loadPrintParts
 
 // ── Fabric Preview — SVG texture + buildings ──────────────────────────────────
 const fabricGroup = new THREE.Group();
@@ -632,14 +661,15 @@ async function loadPrintParts() {
   for (const { url, key } of defs) {
     try {
       const geo = await new Promise((res, rej) => loader.load(url, res, undefined, rej));
-      geo.computeVertexNormals();
       geo.rotateX(-Math.PI / 2);
+      geo.computeVertexNormals();
       const cfg = PRINT_MAT[key];
       const mat = new THREE.MeshStandardMaterial({
         color: cfg.solid, roughness: 0.65, metalness: 0.05,
       });
       mat._solidColor = cfg.solid;
       mat._wireColor  = cfg.wire;
+      mat.clippingPlanes = bboxClip; // prevent bleed beyond bbox boundary
       allMats.push(mat);
       printLayerMats[key] = mat;
       const mesh = new THREE.Mesh(geo, mat);
@@ -650,102 +680,90 @@ async function loadPrintParts() {
     }
   }
 
-  // Compute scale using both axes so a non-square bbox doesn't stretch the model
+  // Make all visible so bounding-box computations are accurate
   Object.values(printLayers).forEach(g => { g.visible = true; });
-  {
-    const sizeBox = new THREE.Box3().setFromObject(printGroup);
-    const sz = new THREE.Vector3();
-    sizeBox.getSize(sz);
-    const scale = sz.x > 0 && sz.z > 0
-      ? Math.min(sceneW / sz.x, sceneD / sz.z)  // fit within bbox on both axes
-      : sz.x > 0 ? sceneW / sz.x : 1;
-    printGroup.scale.setScalar(scale);
-  }
 
-  const box = new THREE.Box3().setFromObject(printGroup);
+  // Pre-scale size (printGroup.scale is still 1,1,1 at this point)
+  const sz = new THREE.Vector3();
+  new THREE.Box3().setFromObject(printGroup).getSize(sz);
+
+  // Non-uniform scale: fit STL footprint exactly to sceneW × sceneD
+  const scaleX = sz.x > 0 ? sceneW / sz.x : 1;
+  const scaleZ = sz.z > 0 ? sceneD / sz.z : 1;
+  printGroup.scale.set(scaleX, scaleX, scaleZ); // Y uses scaleX (height stays proportional to X)
+
+  // Centre the model at scene origin, just above the ground
+  const worldBox = new THREE.Box3().setFromObject(printGroup);
   const centre = new THREE.Vector3();
-  box.getCenter(centre);
-  // Sit 2 units above ground so the baseplate has space to be seen
-  printGroup.position.set(-centre.x, -box.min.y + 2, -centre.z);
+  worldBox.getCenter(centre);
+  printGroup.position.set(-centre.x, -worldBox.min.y + 1, -centre.z);
 
-  // ── Explicit baseplate — the tray water and land lid drop onto ────────────
-  // Size in STL-local units (before group scale is applied)
-  const stlBox = new THREE.Box3().setFromObject(printGroup);
-  const stlSz  = new THREE.Vector3();
-  stlBox.getSize(stlSz);
-  // Divide by scale to get pre-scale dimensions
-  const sc = printGroup.scale.x;
-  const bpW = stlSz.x / sc + 2, bpD = stlSz.z / sc + 2;
-  const bpH = Math.max(bpW, bpD) * 0.008; // ~0.8% of width as plate thickness
+  // Stacking rest positions — water bottom at buildings top, land bottom at water top
+  const bldWB = new THREE.Box3().setFromObject(printLayers.buildings);
+  const watWB = new THREE.Box3().setFromObject(printLayers.water);
+  const lndWB = new THREE.Box3().setFromObject(printLayers.land);
+  const bldTop = bldWB.max.y;
+  const watH   = watWB.max.y - watWB.min.y;
+  _watRestLocalY = (bldTop - watWB.min.y) / scaleX;
+  _lndRestLocalY = (bldTop + watH - lndWB.min.y) / scaleX;
 
+  // ── Baseplate — merged visually with buildings as the "ground layer" ─────
+  const bpW = sz.x, bpD = sz.z;
+  const bpH = 0.008 * Math.max(bpW, bpD);
   const bpGeo = new THREE.BoxGeometry(bpW, bpH, bpD);
   const bpMat = new THREE.MeshStandardMaterial({ color: 0x787870, roughness: 0.85, metalness: 0.04 });
   bpMat._solidColor = 0x787870;
   bpMat._wireColor  = 0x778899;
+  bpMat.clippingPlanes = bboxClip;
   allMats.push(bpMat);
   const bpMesh = new THREE.Mesh(bpGeo, bpMat);
   bpMesh.castShadow = bpMesh.receiveShadow = true;
-  // Position in pre-scale space at the bottom of the buildings layer
-  const bldBox = new THREE.Box3().setFromObject(printLayers.buildings);
-  bpMesh.position.set(
-    (bldBox.min.x + bldBox.max.x) / 2 / sc,
-    bldBox.min.y / sc - bpH / 2,
-    (bldBox.min.z + bldBox.max.z) / 2 / sc,
-  );
-  baseplateGroup.add(bpMesh); // separate group — shown before animation, never wireframed
+  // Position in pre-scale local space below the buildings bottom
+  const bldLocalMinY = (bldWB.min.y - printGroup.position.y) / scaleX;
+  bpMesh.position.set(0, bldLocalMinY - bpH / 2, 0);
+  baseplateGroup.add(bpMesh);
 
   Object.values(printLayers).forEach(g => { g.visible = false; });
-
   printLoaded = true;
   setStatus('');
 }
 
 async function runPrintAnimation() {
-  const fallDist = sceneW * 0.18;
+  // Fall distance in LOCAL space (so world drop = fallLocal * printGroup.scale.y)
+  const fallWorld = Math.max(sceneW, sceneD) * 0.14;
+  const fallLocal = fallWorld / printGroup.scale.y;
   const bldMat = printLayerMats.buildings;
   const watMat = printLayerMats.water;
   const lndMat = printLayerMats.land;
-  const solidC = new THREE.Color();
 
-  // Phase 1a — buildings: wireframe fade-in (1500 ms)
-  if (bldMat) {
-    bldMat.wireframe = true; bldMat.transparent = true;
-    bldMat.opacity = 0; bldMat.color.set(bldMat._wireColor);
-  }
+  // Phase 1 — buildings + baseplate: fade in solid as one merged base layer
+  baseplateGroup.visible = true;
+  if (bldMat) { bldMat.wireframe = false; bldMat.transparent = true; bldMat.opacity = 0; bldMat.color.set(bldMat._solidColor); }
   printLayers.buildings.visible = true;
-  await animateMs(1500, t => { if (bldMat) bldMat.opacity = t; });
+  await animateMs(900, t => { if (bldMat) bldMat.opacity = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; });
+  if (bldMat) { bldMat.transparent = false; bldMat.opacity = 1; }
 
-  // Phase 1b — buildings: wire → solid fill (800 ms)
-  await animateMs(800, t => {
-    const ease = 1 - Math.pow(1 - t, 2.5);
-    if (bldMat) {
-      bldMat.wireframe = t < 0.25;
-      solidC.set(bldMat._solidColor);
-      bldMat.color.set(bldMat._wireColor).lerp(solidC, ease);
-      bldMat.opacity = 1;
-    }
-  });
-  if (bldMat) { bldMat.wireframe = false; bldMat.transparent = false; bldMat.color.set(bldMat._solidColor); }
+  await new Promise(r => setTimeout(r, 200));
 
-  // Phase 2 — water: descend from above (800 ms, ease-out cubic)
+  // Phase 2 — water: descend from above buildings top (ease-out cubic)
   if (watMat) { watMat.wireframe = false; watMat.transparent = false; watMat.color.set(watMat._solidColor); }
-  printLayers.water.position.y = fallDist;
+  printLayers.water.position.y = _watRestLocalY + fallLocal;
   printLayers.water.visible = true;
-  await animateMs(800, t => {
-    printLayers.water.position.y = fallDist * Math.pow(1 - t, 3);
+  await animateMs(900, t => {
+    printLayers.water.position.y = _watRestLocalY + fallLocal * Math.pow(1 - t, 3);
   });
-  printLayers.water.position.y = 0;
+  printLayers.water.position.y = _watRestLocalY;
 
   await new Promise(r => setTimeout(r, 150));
 
-  // Phase 3 — land lid: descend from above (800 ms, ease-out cubic)
+  // Phase 3 — land lid: descend from above water top (ease-out cubic)
   if (lndMat) { lndMat.wireframe = false; lndMat.transparent = false; lndMat.color.set(lndMat._solidColor); }
-  printLayers.land.position.y = fallDist * 1.4;
+  printLayers.land.position.y = _lndRestLocalY + fallLocal * 1.3;
   printLayers.land.visible = true;
-  await animateMs(800, t => {
-    printLayers.land.position.y = fallDist * 1.4 * Math.pow(1 - t, 3);
+  await animateMs(900, t => {
+    printLayers.land.position.y = _lndRestLocalY + fallLocal * 1.3 * Math.pow(1 - t, 3);
   });
-  printLayers.land.position.y = 0;
+  printLayers.land.position.y = _lndRestLocalY;
 }
 
 let fabricLoaded = false;

@@ -887,15 +887,17 @@ async function runSvgTo3dTransition(): Promise<void> {
 
       ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(scratch, 0, 0, bW, bH,
-        fx * (1 - t), fy * (1 - t),
-        fw + (W - fw) * t, fh + (H - fh) * t);
+      // zoom to the 3D canvas area (right of 272 px sidebar), not full window
+      const tx = fx + (SVG_PANEL_W - fx) * t;
+      const tw = fw + (W - SVG_PANEL_W - fw) * t;
+      ctx.drawImage(scratch, 0, 0, bW, bH, tx, fy * (1 - t), tw, fh + (H - fh) * t);
       ctx.imageSmoothingEnabled = true;
 
-      const dark = Math.max(0, (t - 0.72) / 0.28);
+      // brief fade only in the last 12 % — just covers the browser page-nav flash
+      const dark = Math.max(0, (t - 0.88) / 0.12);
       if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, W, H); }
 
-      if (t >= 0.95) { resolve(); return; }
+      if (t >= 0.97) { resolve(); return; }
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
