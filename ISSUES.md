@@ -2,9 +2,11 @@
 
 ## Open
 
-- [ ] **Cloud Run auth/sign-in broken — database tables never created** — `lifespan` in router.py is empty; no `create_all` or migration runner; Cloud Run doesn't use docker-compose so the PostgreSQL init SQL never runs; Cloud SQL instance and GitHub secrets may also be missing *(found 2026-05-26)*
+- [ ] **Local dev: port 8000 blocked by WSL SSH tunnel** — `ssh` process in Ubuntu WSL binds 127.0.0.1:8000 preventing Docker backend from being reached via `localhost:8000`; only affects Vite dev-server workflow; `--profile full` (nginx) unaffected as it uses internal Docker network. Kill tunnel or temporarily remap docker-compose port *(found 2026-05-28)*
 
 ## Resolved
+
+- [x] **Cloud Run auth/sign-in broken — database tables never created** — `Base.metadata.create_all` added to `lifespan` in router.py; runs on every container startup so Cloud Run bootstraps its own schema *(resolved 2026-05-26)*
 
 - [x] **2D transition zoom starts during progress bar** — `fitBounds` moved before phase 3; loop lerps pixelated sel → fitBounds using same fake-asymptotic curve as the bar; phase 4 snaps remaining gap *(resolved 2026-05-23)*
 - [x] **2D transition flicker (page navigation)** — merged map-selector + SVG viewer into one page; after transition phases complete the canvas fades out over the already-displayed inline SVG panel; "← Map" button returns to Cesium view without reload *(resolved 2026-05-23)*

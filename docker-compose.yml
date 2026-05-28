@@ -45,5 +45,19 @@ services:
       database:
         condition: service_healthy
 
+  # Production-like frontend — built nginx image proxying to backend over the
+  # internal Docker network. Activate with: docker compose --profile full up --build
+  # Access the app at http://localhost:8080
+  frontend:
+    profiles: ["full"]
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   pgdata:

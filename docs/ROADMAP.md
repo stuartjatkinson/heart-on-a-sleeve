@@ -5,6 +5,148 @@ A platform where users select a location on a stylised OSM map, choose a merch p
 
 ---
 
+## Development Environment & Agent Collaboration
+
+This project is actively developed by multiple AI agents (Claude Code instances) running in different host environments. This section documents what each environment can and cannot do, and the canonical workflows that keep them aligned.
+
+---
+
+### Environment map
+
+```
+Windows host (Stuart's machine)
+│
+├── Claude Code (Windows)                ← "me" — this agent
+│   Shell: Git Bash / PowerShell
+│   Docker: via Docker Desktop (Windows)
+│   Node: Windows native process
+│   Ports: port 8000 blocked by wslrelay (SSH tunnel in Ubuntu WSL)
+│
+├── Claude Code (Ubuntu WSL2)            ← "Hermes" — the other agent
+│   Shell: bash in Ubuntu WSL2
+│   Docker: same Docker Desktop, shared engine
+│   Node: Linux process inside WSL
+│   Ports: all Docker ports reachable directly from WSL
+│
+└── Docker Desktop (shared)
+    ├── heart-on-a-sleeve-database-1     PostgreSQL/PostGIS :5432
+    ├── heart-on-a-sleeve-backend-1      FastAPI :8000 (internal) / :8000 (host)
+    ├── heart-on-a-sleeve-frontend-1     nginx :80 (internal) / :8080 (host)  ← profile: full only
+    └── heart-on-a-sleeve_default        Docker bridge network (internal DNS)
+```
+
+Both agents share the **same Docker engine, the same containers, and the same database.** A database write from a Windows-agent session is immediately visible to a WSL-agent session, and vice versa.
+
+---
+
+### Known host-specific quirks
+
+#### Windows agent — port 8000 blocked by WSL relay
+
+Docker Desktop on Windows uses a `wslrelay` process to bridge WSL ↔ Windows networking. On this machine, a persistent SSH tunnel inside Ubuntu WSL (`ssh -L 8000:...`) causes `wslrelay` to bind `127.0.0.1:8000` and `::1:8000` on the Windows side. This intercepts any attempt to reach the Docker backend at `localhost:8000` from Windows processes (curl, PowerShell, Vite's Node proxy).
+
+**Workaround:** use `--profile full`. The nginx frontend container proxies to the backend over the internal Docker network (`http://backend:8000`) — this never touches the Windows host port, so the SSH tunnel is irrelevant.
+
+If you need the raw Vite dev-server workflow from Windows, kill the tunnel in WSL first:
+```bash
+# inside Ubuntu WSL
+kill $(pgrep -f 'ssh.*8000')
+```
+
+#### Windows agent — CRLF line endings
+
+Git on Windows may convert LF → CRLF on checkout, producing massive noisy diffs where every line appears changed. This is cosmetic only — no real content change — but it pollutes `git diff` and can confuse staged-vs-unstaged analysis.
+
+Do not commit CRLF-inflated diffs. Check `git diff --stat` for suspiciously balanced insertion/deletion counts (e.g. `+4428 / -4416`) before staging — that pattern means line-ending noise, not real changes.
+
+#### Linux (WSL) agent — Docker label
+
+Images built from Ubuntu WSL carry the label `desktop.docker.io/wsl-distro: Ubuntu`. This is cosmetic metadata added by Docker Desktop. It has no effect on runtime behaviour or CI.
+
+---
+
+### Canonical workflows
+
+These are the only two ways to run the project. Do not invent new port mappings, custom docker run commands, or parallel compose files.
+
+#### Dev mode — hot reload (preferred for code changes)
+
+```bash
+# Start database + backend (Docker)
+docker compose up -d
+
+# Start frontend dev server (Vite, whichever shell you're in)
+cd frontend/cesium && npm run dev
+# → http://localhost:5173
+```
+
+- Backend source is bind-mounted (`./backend:/app`) — FastAPI reloads on save
+- Frontend TypeScript compiles on save in the browser
+- Vite proxies `/api` and `/output` → `localhost:8000`
+- **Windows agents:** only usable if port 8000 is free (no SSH tunnel). Otherwise use full mode.
+
+#### Full mode — production-like, all Docker (preferred for integration testing and Windows agents)
+
+```bash
+docker compose --profile full up -d --build
+# → http://localhost:8080
+```
+
+- Builds the Vite bundle inside Docker, serves via nginx
+- nginx proxies to backend over internal Docker network (no host port conflict)
+- Matches Cloud Run topology exactly: nginx → FastAPI → PostgreSQL
+- Omit `--build` if frontend source hasn't changed (saves ~15 s)
+
+```bash
+# Tear down
+docker compose --profile full down
+```
+
+---
+
+### What each mode does NOT share
+
+| | Dev mode | Full mode | Cloud Run |
+|---|---|---|---|
+| Hot reload (backend) | ✅ | ❌ (restart to update) | ❌ |
+| Hot reload (frontend) | ✅ | ❌ | ❌ |
+| Mirrors nginx routing | ❌ | ✅ | ✅ |
+| Port 8000 on host needed | ✅ | ❌ | ❌ |
+| Uses docker-compose.yml | ✅ | ✅ | ❌ |
+| Uses CI pipeline | ❌ | ❌ | ✅ |
+
+---
+
+### Cloud Run — how deployment works
+
+**docker-compose.yml is not used by Cloud Run.** The CI pipeline (`ci.yml`) builds Docker images directly from `./backend` and `./frontend` using `docker/build-push-action`. Changes to docker-compose files have zero effect on the deployed cloud service.
+
+Deployment is automatic on every push to `main` that passes CI, provided `GCP_PROJECT_ID` is set in GitHub repo Variables. See [`docs/DEPLOY.md`](DEPLOY.md) for the one-time GCP setup.
+
+```
+git push origin main
+  └─► GitHub Actions
+        ├── lint-backend (ruff)
+        ├── typecheck-frontend (tsc)
+        ├── test-backend (pytest smoke)
+        ├── build-backend image
+        ├── build-frontend image
+        ├── publish-images → ghcr.io (always, on main)
+        └── deploy → Google Cloud Run (if GCP_PROJECT_ID set)
+```
+
+---
+
+### Rules for all agents
+
+1. **Never commit machine-specific port remaps.** If port 8000 is blocked locally, use `--profile full` rather than changing `docker-compose.yml` or `vite.config.ts`.
+2. **Never commit CRLF inflation.** Verify `git diff` shows real content changes before staging.
+3. **Stage and commit atomically.** Don't leave large staged hunks from a previous session; another agent will pick them up and misread the state.
+4. **Use `docker compose down` when done.** Leaving containers running across sessions causes database state confusion.
+5. **Both agents write to the same ISSUES.md.** Log findings immediately; resolve immediately on fix.
+
+---
+
 ## Phase 1 — Core Backend ✅ Done
 
 - [x] FastAPI app with uvicorn, all imports clean
@@ -216,13 +358,15 @@ Moved SVG generation from the Python backend to the browser for Cloud Run scalab
 
 - [x] `backend/Dockerfile` — Python 3.12-slim, thread pool, SIGTERM-safe
 - [x] `frontend/Dockerfile` — node:20-alpine build → nginx:alpine serve
-- [x] `docker-compose.yml` — dev compose (DB + backend + nginx)
+- [x] `docker-compose.yml` — two modes: default (DB + backend, Vite dev server) and `--profile full` (adds nginx frontend on :8080)
 - [x] `docker-compose.prod.yml` — production compose (no pgadmin, env-validated secrets, restart policies)
-- [x] `frontend/nginx.conf` — fixed /api/ proxy, SPA routing
-- [x] GitHub Actions CI — lint-backend (ruff), build-backend image, build-frontend + image
-- [ ] `heart.stuartjatkinson.co.uk` routing + TLS via Cloudflare
-- [ ] GitHub Actions CD — push images to registry → deploy
+- [x] `frontend/nginx.conf` — reverse proxy with large buffers for JWT, SPA routing
+- [x] DB tables auto-created on startup via `Base.metadata.create_all` in lifespan — no manual migration step needed for Cloud Run
+- [x] GitHub Actions CI — ruff lint, tsc typecheck, pytest smoke, build + push images to ghcr.io
+- [x] GitHub Actions CD — deploy to Cloud Run on push to main (dormant until `GCP_PROJECT_ID` repo variable is set)
+- [ ] `heart.stuartjatkinson.co.uk` custom domain + TLS (Cloud Run domain mapping + DNS)
 - [ ] Rate limiting on Overpass calls
+- [ ] Alembic migrations (currently using `create_all` — fine for new deploys, not for schema changes)
 
 ---
 

@@ -19,50 +19,145 @@ A map-to-merch platform. Select any area on an interactive OSM globe, choose a p
 
 ```
 heart-on-a-sleeve/
-├── backend/                        FastAPI (Python 3.14)
+├── backend/                        FastAPI (Python 3.12)
 │   ├── app/
-│   │   ├── api/router.py           REST endpoints (async, thread-pool for CPU work)
-│   │   ├── services/
-│   │   │   ├── osm_fetcher.py      Async Overpass API client (httpx, correct User-Agent)
-│   │   │   ├── svg_generator.py    OSM → SVG (cosLat projection, clipPath, 3 styles)
-│   │   │   ├── stl_generator.py    OSM → 3 interlocking STL pieces (trimesh + shapely)
-│   │   │   └── license_tracker.py  ODbL attribution
-│   │   ├── models/schemas.py       Pydantic models (all STL params tunable)
-│   │   └── core/config.py          Settings
-│   ├── main.py
+│   │   ├── api/
+│   │   │   ├── router.py           REST endpoints (async, thread-pool for CPU work)
+│   │   │   ├── auth.py             JWT register/login/refresh/me
+│   │   │   └── projects.py         Save/load design projects (CRUD)
+│   │   ├── core/
+│   │   │   ├── config.py           Settings (env vars, pydantic-settings)
+│   │   │   ├── database.py         Async SQLAlchemy engine + session
+│   │   │   └── security.py         bcrypt hashing, JWT access+refresh tokens
+│   │   ├── models/
+│   │   │   ├── db_models.py        User + DesignProject ORM models
+│   │   │   └── schemas.py          Pydantic request/response models
+│   │   └── services/
+│   │       ├── osm_fetcher.py      Async Overpass API client
+│   │       ├── svg_generator.py    OSM → SVG (cosLat projection, 3 styles)
+│   │       ├── stl_generator.py    OSM → 3 interlocking STL pieces
+│   │       └── license_tracker.py  ODbL attribution
+│   ├── Dockerfile
 │   └── requirements.txt
 │
-└── frontend/cesium/                Vite + TypeScript + CesiumJS
-    ├── src/app.ts                  Globe selector, bbox draw/move/resize/rotate
-    ├── public/
-    │   ├── app.css                 Shared design system (CSS variables, all components)
-    │   ├── 3d-viewer.html          Live Three.js OSM renderer + Print Preview + regen panel
-    │   └── svg-viewer.html         Pan/zoom SVG viewer
-    └── index.html                  Map selector panel
+├── frontend/
+│   ├── Dockerfile                  Multi-stage: node build → nginx:alpine serve
+│   ├── nginx.conf                  Reverse-proxy template (BACKEND_URL injected at start)
+│   └── cesium/                     Vite + TypeScript + CesiumJS
+│       ├── src/app.ts              Globe selector, bbox draw/move/resize/rotate
+│       ├── public/
+│       │   ├── app.css             Shared design system
+│       │   ├── login.html          Auth page
+│       │   ├── dashboard.html      Saved projects
+│       │   ├── 3d-viewer.html      Three.js OSM renderer + Print Preview
+│       │   └── svg-viewer.html     Pan/zoom SVG viewer + colour editor
+│       └── index.html              Map selector + merch picker
+│
+├── docker-compose.yml              Dev: database + backend (+ frontend via --profile full)
+├── docker-compose.prod.yml         Prod-like: all services with env-file credentials
+├── db/init/                        PostgreSQL init SQL (runs on first container start)
+└── docs/
+    ├── DEPLOY.md                   One-time GCP / Cloud Run setup guide
+    └── ROADMAP.md                  Phase plan and build status
 ```
+
+**Request flow (full local / Cloud Run):**
+
+```
+Browser → nginx (port 80/8080)
+            ├── /           → serve built Vite bundle
+            ├── /api/*      → proxy to FastAPI backend
+            └── /output/*   → proxy to FastAPI static files
+
+FastAPI backend
+    ├── /api/auth/*         → JWT auth (PostgreSQL users table)
+    ├── /api/projects/*     → design project CRUD (PostgreSQL)
+    ├── /api/generate/svg   → Overpass fetch → svgwrite render
+    ├── /api/generate/stl   → Overpass fetch → trimesh/shapely STL
+    └── /api/osm/features   → Overpass proxy (3D viewer live render)
+```
+
+---
+
+## Environments
+
+| Environment | How it runs | URL |
+|---|---|---|
+| **Dev** | Vite dev server + Docker backend + Docker DB | `:5173` |
+| **Full local** | All three services in Docker (mirrors Cloud Run) | `:8080` |
+| **Cloud (prod)** | CI/CD → Google Cloud Run (auto on push to `main`) | Custom domain |
 
 ---
 
 ## Running locally
 
-### Backend
+### Prerequisites
 
-```powershell
-cd backend
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m uvicorn app.api.router:app --host 0.0.0.0 --port 8000 --reload
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (running)
+- [Node.js 20+](https://nodejs.org/) (for dev mode only)
+
+---
+
+### Dev mode — fast iteration with hot reload
+
+Use this for day-to-day development. The backend and database run in Docker; the frontend runs as a Vite dev server with TypeScript hot-reload.
+
+**1. Start the backend and database:**
+
+```bash
+docker compose up -d
 ```
 
-### Frontend
+This starts `database` (PostgreSQL/PostGIS on `:5432`) and `backend` (FastAPI on `:8000`, source-mounted with `--reload`). Database tables are created automatically on first startup.
 
-```powershell
+**2. Start the frontend dev server:**
+
+```bash
 cd frontend/cesium
-npm install
+npm install          # first time only
 npm run dev          # → http://localhost:5173
 ```
 
-Vite proxies `/api` and `/output` to the backend at port 8000.
+Vite proxies `/api` and `/output` to the backend at `localhost:8000`.
+
+**3. Stop everything:**
+
+```bash
+docker compose down
+```
+
+---
+
+### Full local mode — production-like stack
+
+Use this to test the full nginx → backend → database pipeline exactly as it runs on Cloud Run. No Vite dev server; the frontend is compiled and served by nginx.
+
+```bash
+docker compose --profile full up -d --build
+# → http://localhost:8080
+```
+
+Stop it:
+
+```bash
+docker compose --profile full down
+```
+
+> **Note:** the `frontend` service rebuilds the Vite bundle each time `--build` is passed.
+> Omit `--build` if the frontend source hasn't changed.
+
+---
+
+### Cloud Run (production)
+
+Deployment is automatic. Every push to `main` that passes CI will:
+
+1. Build and push both Docker images to `ghcr.io` (always)
+2. Deploy to Google Cloud Run (only if `GCP_PROJECT_ID` is set in repo Variables)
+
+The CI pipeline builds images directly from `./backend` and `./frontend` — it does **not** use `docker-compose.yml`. Changes to `docker-compose.yml` have no effect on the cloud deployment.
+
+See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the one-time GCP setup.
 
 ---
 
