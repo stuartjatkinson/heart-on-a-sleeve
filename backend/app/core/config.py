@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     # App
     secret_key: str = "change-me-in-production"
+    port: str = "8080"
+    data_dir: str = "/app/data"
+
     # Stored as a plain string; use .get_cors_origins() to get the parsed list.
     # Accepts comma-separated ("a,b") or JSON array ('["a","b"]').
     cors_origins: str = "http://localhost:3000,http://localhost:5173"

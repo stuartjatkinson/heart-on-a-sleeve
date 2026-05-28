@@ -5,7 +5,9 @@ from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 import asyncio
 import functools
+import math
 import os
+import httpx
 
 from app.core.config import get_settings
 from app.core.database import engine
@@ -67,8 +69,10 @@ app.add_middleware(
 app.mount("/output", StaticFiles(directory=DATA_DIR), name="output")
 
 # Mount CesiumJS frontend only when running outside Docker (source tree present)
+# CESIUM_DIR is set by main.py to frontend/cesium/dist; fallback uses __file__ resolution.
+# __file__ is backend/app/api/router.py → 4 up = backend/ → frontend/cesium/dist
 CESIUM_DIR = os.environ.get("CESIUM_DIR") or os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "cesium")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "cesium", "dist")
 )
 if os.path.isdir(CESIUM_DIR):
     app.mount("/cesium", StaticFiles(directory=CESIUM_DIR, html=True), name="cesium")
@@ -221,4 +225,103 @@ async def health():
     return {"status": "ok"}
 
 
-app.mount("/output", StaticFiles(directory=DATA_DIR), name="output")
+# ─── Estimate ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/estimate")
+async def estimateGeneration(req: SVGGenerationRequest):
+    """Fast pre-flight estimate for SVG and STL generation time + complexity.
+
+    Runs a lightweight Overpass count (no geometry) to gauge element count,
+    then estimates SVG and STL generation time based on area and element density.
+    """
+    import time as _t
+    t0 = _t.perf_counter()
+
+    bbox = req.bbox
+    cos_lat = math.cos((bbox.north + bbox.south) / 2 * math.pi / 180)
+    km2 = round((bbox.east - bbox.west) * cos_lat * 111.32 * (bbox.north - bbox.south) * 111.32, 2)
+
+    # Lightweight count query — no geometry, just element counts per type
+    bb = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
+    count_query = f"""
+    [out:json][timeout:25];
+    (
+      way["highway"]({bb});
+      way["building"]({bb});
+      way["landuse"]({bb});
+      way["natural"]({bb});
+      way["waterway"]({bb});
+      way["railway"]({bb});
+      way["leisure"]({bb});
+    );
+    out count;
+    """
+    element_count = 0
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=8, read=30, write=5)) as client:
+            r = await client.post(
+                os.environ.get("OVERPASS_ENDPOINT", "https://overpass.kumi.systems/api/interpreter"),
+                data={"data": count_query},
+                headers={"User-Agent": "heart-on-a-sleeve/1.0"},
+            )
+            if r.is_success:
+                data = r.json()
+                elements = data.get("elements", [])
+                # out count returns one element with tags.total = combined count
+                if elements and "total" in elements[0].get("tags", {}):
+                    element_count = int(elements[0]["tags"]["total"])
+                elif elements:
+                    # Fallback: sum individual counts from each element
+                    element_count = sum(int(e.get("tags", {}).get("total", 0)) for e in elements)
+    except Exception:
+        pass  # estimate stays based on km2 only
+
+    # ── SVG estimate ────────────────────────────────────────────────────────────
+    # Based on element count + area. Elements drive SVG generation time linearly.
+    # Small  : <5k elements, <0.5 km² → fast (2s)
+    # Medium : 5k–20k elements, 0.5–5 km² → moderate (5–12s)
+    # Large  : 20k–60k elements, 5–20 km² → slow (12–25s)
+    # Huge   : >60k elements, >20 km² → very slow (>25s), suggest smaller area
+    if km2 < 0.5 and element_count < 5_000:
+        svg_ms = 2_000
+        complexity = "low"
+    elif km2 < 5 and element_count < 20_000:
+        svg_ms = min(12_000, 3_000 + element_count * 0.4)
+        complexity = "medium"
+    elif km2 < 20 and element_count < 60_000:
+        svg_ms = min(25_000, 8_000 + element_count * 0.25)
+        complexity = "high"
+    else:
+        svg_ms = 30_000
+        complexity = "very_high"
+
+    # ── OSM fetch estimate ───────────────────────────────────────────────────────
+    # Overpass response time depends on area and server load.
+    # Use a separate lightweight timeout-based estimate.
+    # Small areas: ~2s, medium: 4–8s, large: 8–20s, huge: >20s
+    if km2 < 0.5:
+        osm_ms = 3_000
+    elif km2 < 5:
+        osm_ms = min(12_000, 4_000 + km2 * 1_500)
+    elif km2 < 20:
+        osm_ms = min(20_000, 8_000 + km2 * 800)
+    else:
+        osm_ms = 25_000
+
+    # ── STL estimate ────────────────────────────────────────────────────────────
+    # Buildings are the primary cost. Estimate building count as ~30% of total ways.
+    # Each building way has ~8 nodes on average.
+    bldg_est = max(10, int(element_count * 0.25))
+    stl_ms = min(45_000, 3_000 + bldg_est * 15 + km2 * 400)
+
+    elapsed = (_t.perf_counter() - t0) * 1000
+    timing_utils.tlog("estimate_preflight", elapsed, f"km2={km2} elements={element_count} svg_ms={svg_ms} stl_ms={stl_ms}")
+
+    return {
+        "osm_estimate_ms":  osm_ms,
+        "svg_estimate_ms":  svg_ms,
+        "stl_estimate_ms":  stl_ms,
+        "area_km2":         km2,
+        "element_count":    element_count,
+        "complexity":      complexity,
+    }

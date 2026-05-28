@@ -46,7 +46,9 @@ class DesignProjectResponse(BaseModel):
 
 class SVGGenerationRequest(BaseModel):
     bbox: BBox
-    merch_type: str
+    merch_type: str = Field(
+        ..., pattern="^(placemat|coaster|tshirt|mug|tote|3d_print)$"
+    )
     style: str = "osm_default"
     include_labels: bool = True
     include_buildings: bool = True

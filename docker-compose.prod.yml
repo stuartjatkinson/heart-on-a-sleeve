@@ -27,6 +27,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://heart.stuartjatkinson.co.uk}
       OVERPASS_ENDPOINT: ${OVERPASS_ENDPOINT:-https://overpass.kumi.systems/api/interpreter}
+      DATA_DIR: /data
     volumes:
       - ./data:/data
     depends_on:

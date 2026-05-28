@@ -34,7 +34,9 @@ class OSMFetcher:
                round(bbox.east, 5), round(bbox.north, 5))
         cached = self._cache.get(key)
         if cached and (time.time() - cached[1] < self._cache_ttl):
-            return cached[0]
+            data = cached[0]
+            data['_cached'] = True
+            return data
 
         bb = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
         query = f"""

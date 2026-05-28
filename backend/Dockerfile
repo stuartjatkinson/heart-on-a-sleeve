@@ -15,6 +15,4 @@ ENV DATA_DIR=/data
 
 EXPOSE 8080
 
-# PORT is injected by Cloud Run (default 8080); fall back to 8000 for local use
-ENV PORT=8080
-CMD ["sh", "-c", "uvicorn app.api.router:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn app.api.router:app --host 0.0.0.0 --port ${PORT:-8080}"]
