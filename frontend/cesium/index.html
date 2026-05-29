@@ -94,12 +94,13 @@
         }
         .cycle-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-        /* Mouse controls hint */
+        /* Mouse controls hint — hidden on touch devices */
         #map-hint {
             position: absolute; bottom: 20px; right: 20px; z-index: 100;
             font-size: 11px; color: var(--text-dim); line-height: 1.9;
             text-align: right; pointer-events: none;
         }
+        @media (hover: none) { #map-hint { display: none; } }
 
         /* ── Inline SVG viewer ── */
         #svg-view {
@@ -235,6 +236,45 @@
             font-family: inherit; cursor: pointer; transition: all 0.12s;
         }
         .btn-danger:hover { border-color: #e06060; background: rgba(224,96,96,0.08); }
+
+        /* ── Mobile ───────────────────────────────────────────────────────── */
+        @media (max-width: 900px) {
+          /* Main panel → bottom sheet */
+          #panel {
+            top: auto !important; left: 0 !important;
+            bottom: 0; right: 0; width: 100% !important;
+            max-height: 75svh; max-height: 75vh;
+            border-radius: 14px 14px 0 0;
+            border-left: none; border-right: none; border-bottom: none;
+            padding-top: 10px;
+            transform: translateY(calc(100% - 100px));
+            transition: transform 0.3s cubic-bezier(.25,.8,.3,1);
+          }
+          #panel.sheet-open { transform: translateY(0); }
+
+          /* SVG viewer side panel → bottom sheet */
+          #svg-side {
+            position: fixed !important;
+            bottom: 0; left: 0; right: 0; top: auto !important;
+            width: 100% !important; height: auto !important;
+            max-height: 75svh; max-height: 75vh;
+            border-radius: 14px 14px 0 0;
+            border-left: none; border-right: none; border-bottom: none;
+            padding-top: 10px;
+            transform: translateY(calc(100% - 80px));
+            transition: transform 0.3s cubic-bezier(.25,.8,.3,1);
+            z-index: 9999;
+            overflow-y: auto;
+          }
+          #svg-side.sheet-open { transform: translateY(0); }
+          #svg-vp { position: fixed !important; inset: 0; width: 100% !important; height: 100svh !important; height: 100vh !important; }
+
+          /* Larger coaster cycle touch targets */
+          .cycle-btn { width: 32px; height: 32px; font-size: 16px; }
+
+          /* Designs FAB — move below status bar safe area */
+          #designs-fab { top: 12px; right: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -243,6 +283,7 @@
 <div id="map-hint">Left drag — pan<br>Right drag — zoom<br>Middle drag — tilt<br>Scroll — zoom</div>
 
 <div id="panel" class="panel">
+    <div class="sheet-handle" id="panel-handle"></div>
     <h2>Heart on a Sleeve</h2>
 
     <div id="search-wrapper">
@@ -296,6 +337,7 @@
 <!-- ── Inline SVG viewer (shown after generate, no page navigation) ── -->
 <div id="svg-view">
     <div id="svg-side" class="panel">
+        <div class="sheet-handle" id="svg-side-handle"></div>
         <button class="btn" id="btn-back">← Map</button>
         <h2>SVG Preview</h2>
         <div id="svg-regen-status"></div>
@@ -352,5 +394,82 @@
 </div>
 
 <script type="module" src="/src/app.ts"></script>
+<script>
+// ── Mobile bottom-sheet toggles ───────────────────────────────────────────────
+(function() {
+  function initSheet(panelId, handleId) {
+    var panel  = document.getElementById(panelId);
+    var handle = document.getElementById(handleId);
+    if (!handle || !panel) return;
+    handle.addEventListener('click', function() { panel.classList.toggle('sheet-open'); });
+    var _ty = 0;
+    panel.addEventListener('touchstart', function(e) { _ty = e.touches[0].clientY; }, { passive: true });
+    panel.addEventListener('touchend', function(e) {
+      var dy = _ty - e.changedTouches[0].clientY;
+      if (dy > 40) panel.classList.add('sheet-open');
+      else if (dy < -40) panel.classList.remove('sheet-open');
+    }, { passive: true });
+  }
+  initSheet('panel',    'panel-handle');
+  initSheet('svg-side', 'svg-side-handle');
+})();
+
+// ── SVG viewport touch pan + pinch zoom ───────────────────────────────────────
+(function() {
+  var vp = document.getElementById('svg-vp');
+  if (!vp) return;
+  var t0 = null, t1 = null, pinchDist = 0, pinchScale = 1;
+  // svgScl / svgTx / svgTy live in app.ts module scope — we drive them via
+  // synthetic input events only if we can, otherwise we duplicate the logic.
+  // Simpler: attach to the same element that the mouse handlers use and
+  // dispatch equivalent pointer state. Actually the cleanest solution is to
+  // expose the pan/zoom variables through window so they can be shared.
+  // For now wire touch → same DOM events app.ts already listens to via
+  // MouseEvent simulation.
+  vp.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      t0 = { x: e.touches[0].clientX, y: e.touches[0].clientY }; t1 = null;
+      // Simulate mousedown so app.ts drag state activates
+      vp.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: t0.x, clientY: t0.y, button: 0 }));
+    } else if (e.touches.length === 2) {
+      t0 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      t1 = { x: e.touches[1].clientX, y: e.touches[1].clientY };
+      pinchDist = Math.hypot(t1.x - t0.x, t1.y - t0.y);
+      // store current scale from the wrap transform
+      var m = (document.getElementById('svg-wrap').style.transform || '').match(/scale\(([^)]+)\)/);
+      pinchScale = m ? parseFloat(m[1]) : 1;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  vp.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (e.touches.length === 1 && t0) {
+      var nx = e.touches[0].clientX, ny = e.touches[0].clientY;
+      window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: nx, clientY: ny }));
+      t0 = { x: nx, y: ny };
+    } else if (e.touches.length === 2 && t0 && t1) {
+      var a = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      var b = { x: e.touches[1].clientX, y: e.touches[1].clientY };
+      var d = Math.hypot(b.x - a.x, b.y - a.y);
+      var ratio = d / pinchDist;
+      var mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      // Fire a wheel event at the midpoint to reuse app.ts scroll-zoom logic
+      vp.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true, cancelable: true,
+        clientX: mid.x, clientY: mid.y,
+        deltaY: ratio > 1 ? -100 : 100,
+      }));
+      pinchDist = d; t0 = a; t1 = b;
+    }
+  }, { passive: false });
+
+  vp.addEventListener('touchend', function(e) {
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    t0 = e.touches[0] ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    t1 = null;
+  }, { passive: true });
+})();
+</script>
 </body>
 </html>

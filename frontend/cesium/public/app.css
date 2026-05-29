@@ -239,6 +239,22 @@ body {
   margin-top: 8px;
 }
 
+/* ── Mobile sheet handle ──────────────────────────────────────────────────── */
+.sheet-handle {
+  display: none;
+  width: 36px; height: 4px;
+  background: var(--border-item);
+  border-radius: 2px;
+  margin: 0 auto 14px;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .sheet-handle { display: block; }
+  .hint         { display: none; }
+}
+
 /* ── Spinner ────────────────────────────────────────────────────────────────── */
 .spinner {
   display: none;

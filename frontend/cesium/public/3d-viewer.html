@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Heart on a Sleeve — 3D Map</title>
   <link rel="stylesheet" href="/app.css">
   <style>
@@ -34,10 +35,37 @@
       object-fit: contain; background: #0d0e12;
       z-index: 8; transition: opacity 0.7s ease;
     }
+
+    @media (max-width: 900px) {
+      body { display: block; }
+      #panel3d {
+        position: fixed !important;
+        bottom: 0; left: 0; right: 0; top: auto !important;
+        width: 100% !important; height: auto !important;
+        max-height: 75svh; max-height: 75vh;
+        border-radius: 14px 14px 0 0;
+        border-left: none; border-right: none; border-bottom: none;
+        padding-top: 10px;
+        transform: translateY(calc(100% - 80px));
+        transition: transform 0.3s cubic-bezier(.25,.8,.3,1);
+        z-index: 200;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+      #panel3d.sheet-open { transform: translateY(0); }
+      #canvas-wrap {
+        position: fixed; inset: 0;
+        width: 100% !important;
+        height: 100svh !important; height: 100vh !important;
+      }
+      /* params panel: give inputs a bigger touch target */
+      .param-row input[type="number"] { width: 64px; padding: 6px 5px; font-size: 13px; }
+    }
   </style>
 </head>
 <body>
 <div id="panel3d" class="panel">
+  <div class="sheet-handle" id="panel3d-handle"></div>
   <button class="btn" onclick="window.location.href='/'" style="margin-bottom:8px">← SVG View</button>
   <h2>3D Map Preview</h2>
   <div id="status">Loading…</div>
@@ -598,8 +626,37 @@ setStatus('');
 statsEl.textContent = `${nBuildings} buildings · ${nRoads} roads`;
 setLoad('Building scene…');
 entryReady = true; // hand off to tickEntry — bar takes over at 50 %
-// SVG cover has done its job — fade it out now the scene is built
-if (svgCover) { svgCover.style.opacity = '0'; setTimeout(() => svgCover?.remove(), 750); }
+// SVG cover: shrink to match the 3D ground plate in screen space, then fade out
+if (svgCover) {
+  const cW = canvasWrap.clientWidth || (innerWidth - 272);
+  const cH = innerHeight;
+  const hw = sceneW / 2, hd = sceneD / 2;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [cx, cz] of [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]]) {
+    const n = new THREE.Vector3(cx, 0, cz).project(camera);
+    const sx = (n.x + 1) / 2 * cW, sy = (-n.y + 1) / 2 * cH;
+    if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+    if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+  }
+  const tx = minX, ty = minY, tw = maxX - minX, th = maxY - minY;
+  svgCover.style.transition = 'none';
+  svgCover.style.inset = 'auto';
+  svgCover.style.left = '0px'; svgCover.style.top = '0px';
+  svgCover.style.width = cW + 'px'; svgCover.style.height = cH + 'px';
+  const t0cover = performance.now(), SHRINK_MS = 650;
+  (function shrink(now) {
+    const p = Math.min(1, (now - t0cover) / SHRINK_MS);
+    const ease = 1 - Math.pow(1 - p, 3);
+    svgCover.style.left   = (tx * ease) + 'px';
+    svgCover.style.top    = (ty * ease) + 'px';
+    svgCover.style.width  = (cW + (tw - cW) * ease) + 'px';
+    svgCover.style.height = (cH + (th - cH) * ease) + 'px';
+    if (p < 1) { requestAnimationFrame(shrink); return; }
+    svgCover.style.transition = 'opacity 0.35s ease';
+    svgCover.style.opacity = '0';
+    setTimeout(() => { if (svgCover.parentNode) svgCover.remove(); }, 400);
+  })(performance.now());
+}
 
 // ── Print Preview — load the 3 STL pieces ────────────────────────────────────
 const printGroup  = new THREE.Group();
@@ -669,7 +726,6 @@ async function loadPrintParts() {
       });
       mat._solidColor = cfg.solid;
       mat._wireColor  = cfg.wire;
-      mat.clippingPlanes = bboxClip; // prevent bleed beyond bbox boundary
       allMats.push(mat);
       printLayerMats[key] = mat;
       const mesh = new THREE.Mesh(geo, mat);
@@ -714,7 +770,6 @@ async function loadPrintParts() {
   const bpMat = new THREE.MeshStandardMaterial({ color: 0x787870, roughness: 0.85, metalness: 0.04 });
   bpMat._solidColor = 0x787870;
   bpMat._wireColor  = 0x778899;
-  bpMat.clippingPlanes = bboxClip;
   allMats.push(bpMat);
   const bpMesh = new THREE.Mesh(bpGeo, bpMat);
   bpMesh.castShadow = bpMesh.receiveShadow = true;
@@ -830,6 +885,7 @@ btnMode?.addEventListener('click', async function() {
     if (is3dPrint) {
       await loadPrintParts();
       osmGroup.visible   = false;
+      ground.visible     = false;
       printGroup.visible = true;
       // Show the baseplate tray immediately so water/land have something to drop onto
       baseplateGroup.visible = true;
@@ -847,6 +903,7 @@ btnMode?.addEventListener('click', async function() {
   } else {
     showingPreview         = false;
     osmGroup.visible       = true;
+    ground.visible         = true;
     printGroup.visible     = false;
     fabricGroup.visible    = false;
     baseplateGroup.visible = false;
@@ -954,6 +1011,21 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(W, H);
 });
+
+// ── Mobile bottom-sheet toggle ────────────────────────────────────────────────
+(function() {
+  const panel  = document.getElementById('panel3d');
+  const handle = document.getElementById('panel3d-handle');
+  if (!handle || !panel) return;
+  handle.addEventListener('click', () => panel.classList.toggle('sheet-open'));
+  let _ty = 0;
+  panel.addEventListener('touchstart', e => { _ty = e.touches[0].clientY; }, { passive: true });
+  panel.addEventListener('touchend', e => {
+    const dy = _ty - e.changedTouches[0].clientY;
+    if (dy > 40) panel.classList.add('sheet-open');
+    else if (dy < -40) panel.classList.remove('sheet-open');
+  }, { passive: true });
+})();
 
 </script>
 </body>

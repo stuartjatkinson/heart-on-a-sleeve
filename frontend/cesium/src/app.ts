@@ -869,57 +869,13 @@ async function runSvgTo3dTransition(): Promise<void> {
   ov.style.opacity = '1';
   ov.style.transition = '';
 
-  let img: HTMLImageElement | null = null;
-  if (svgCurrentUrl) img = await loadImg(svgCurrentUrl).catch(() => null);
-
-  if (!img) {
-    await animPhase(350, t => { ctx.fillStyle = `rgba(0,0,0,${t})`; ctx.fillRect(0, 0, W, H); });
-    return;
-  }
-
-  const ratio = svgNatW / svgNatH || 1;
-  const vw = W - SVG_PANEL_W, m = 40;
-  let fw: number, fh: number;
-  if ((vw - m*2) / (H - m*2) > ratio) { fh = H - m*2; fw = fh * ratio; }
-  else                                  { fw = vw - m*2; fh = fw / ratio; }
-  const fx = SVG_PANEL_W + (vw - fw) / 2;
-  const fy = (H - fh) / 2;
-
-  const TAU = 800;
-  const t0 = performance.now();
-
-  // Start: SVG centred in right-of-panel viewport. End: fill full window.
-  const startTx = fx, startTy = fy;
-  const startTw = fw, startTh = fh;
-  const endTx = 0, endTy = 0;
-  const endTw = W, endTh = H;
-
-  await new Promise<void>(resolve => {
-    function loop(ts: number): void {
-      const elapsed = ts - t0;
-      // Smooth ease-in-out (cubic hermite) over TAU ms
-      const p = Math.min(1, elapsed / TAU);
-      const t = 3 * p * p - 2 * p * p * p;
-
-      ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(img!, 0, 0, fw, fh,
-        startTx + (endTx - startTx) * t,
-        startTy + (endTy - startTy) * t,
-        startTw + (endTw - startTw) * t,
-        startTh + (endTh - startTh) * t);
-
-      // Brief fade at the very end to smooth the page-load flash
-      const dark = Math.max(0, (t - 0.88) / 0.12);
-      if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, W, H); }
-
-      if (t >= 0.99) { resolve(); return; }
-      requestAnimationFrame(loop);
-    }
-    requestAnimationFrame(loop);
+  // Simple fade-to-dark — the SVG cover in the 3D viewer handles the rest
+  await animPhase(300, t => {
+    const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    ctx.fillStyle = `rgba(13,14,18,${ease})`;
+    ctx.fillRect(0, 0, W, H);
   });
-
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
 }
 
 // ---------------------------------------------------------------------------

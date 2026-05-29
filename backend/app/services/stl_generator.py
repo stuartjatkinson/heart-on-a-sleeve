@@ -230,21 +230,20 @@ class STLGenerator:
             meshes.append(m)
 
         if topology:
-            # Individual buildings at proportional heights
             for poly, h in zip(bldg_polys, bldg_heights):
-                for p in _geom_parts(poly):
+                for p in _geom_parts(make_valid(poly.intersection(plate_shape))):
                     m = _extrude(p, h)
                     if m:
                         meshes.append(m)
             for poly in raw_roads:
-                for p in _geom_parts(make_valid(poly)):
+                for p in _geom_parts(make_valid(poly.intersection(plate_shape))):
                     m = _extrude(p, bldg_h)
                     if m:
                         meshes.append(m)
         else:
-            # Flat mode: extrude the fully merged urban union
-            # → terrace rows merge into single cuboids, no hairline gaps
-            for p in _geom_parts(urban_union):
+            # Flat mode: clip to plate boundary first, then extrude merged union
+            urban_clipped = make_valid(urban_union.intersection(plate_shape))
+            for p in _geom_parts(urban_clipped):
                 m = _extrude(p, bldg_h)
                 if m:
                     meshes.append(m)

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Heart on a Sleeve — SVG Preview</title>
   <script>
     if (!localStorage.getItem('hoas_token')) {
@@ -70,6 +71,30 @@
     #user-nav { display: flex; flex-direction: column; gap: 4px; }
 
     #loading { z-index: 200; }
+
+    @media (max-width: 900px) {
+      #app { display: block; }
+      #side-panel {
+        position: fixed !important;
+        bottom: 0; left: 0; right: 0; top: auto !important;
+        width: 100% !important; height: auto !important;
+        max-height: 75svh; max-height: 75vh;
+        border-radius: 14px 14px 0 0;
+        border-left: none; border-right: none; border-bottom: none;
+        padding-top: 10px;
+        transform: translateY(calc(100% - 80px));
+        transition: transform 0.3s cubic-bezier(.25,.8,.3,1);
+        z-index: 200;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+      #side-panel.sheet-open { transform: translateY(0); }
+      #viewport {
+        position: fixed; inset: 0;
+        width: 100% !important;
+        height: 100svh !important; height: 100vh !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -77,6 +102,7 @@
 
 <div id="app">
   <div id="side-panel" class="panel">
+    <div class="sheet-handle" id="side-handle"></div>
     <h2>SVG Preview</h2>
     <div id="regen-status"></div>
     <div id="scale-display">—</div>
@@ -447,6 +473,56 @@ fetch(initSvgUrl)
   .then(text => displaySvg(text, true))
   .then(() => { document.getElementById('loading').style.display = 'none'; })
   .catch(err => { document.getElementById('loading').textContent = `Error: ${err.message}`; });
+
+// Touch pan + pinch zoom
+(function() {
+  let t0 = null, t1 = null, pinchDist = 0, pinchScale = 1;
+  viewport.addEventListener('touchstart', e => {
+    e.preventDefault();
+    t0 = [e.touches[0].clientX, e.touches[0].clientY];
+    t1 = e.touches.length > 1 ? [e.touches[1].clientX, e.touches[1].clientY] : null;
+    if (t1) { pinchDist = Math.hypot(t1[0]-t0[0], t1[1]-t0[1]); pinchScale = scale; }
+  }, { passive: false });
+  viewport.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (e.touches.length === 1 && t0) {
+      tx += e.touches[0].clientX - t0[0];
+      ty += e.touches[0].clientY - t0[1];
+      t0 = [e.touches[0].clientX, e.touches[0].clientY];
+      applyTransform();
+    } else if (e.touches.length === 2 && t0 && t1) {
+      const a = [e.touches[0].clientX, e.touches[0].clientY];
+      const b = [e.touches[1].clientX, e.touches[1].clientY];
+      const d = Math.hypot(b[0]-a[0], b[1]-a[1]);
+      const ns = Math.max(0.05, Math.min(pinchScale * d / pinchDist, 40));
+      const r  = viewport.getBoundingClientRect();
+      const mx = (a[0]+b[0])/2 - r.left, my = (a[1]+b[1])/2 - r.top;
+      tx = mx - (mx - tx) * (ns / scale);
+      ty = my - (my - ty) * (ns / scale);
+      scale = ns; t0 = a; t1 = b;
+      applyTransform();
+    }
+  }, { passive: false });
+  viewport.addEventListener('touchend', e => {
+    t0 = e.touches[0] ? [e.touches[0].clientX, e.touches[0].clientY] : null;
+    t1 = e.touches[1] ? [e.touches[1].clientX, e.touches[1].clientY] : null;
+  }, { passive: true });
+})();
+
+// Bottom-sheet toggle
+(function() {
+  const panel  = document.getElementById('side-panel');
+  const handle = document.getElementById('side-handle');
+  if (!handle || !panel) return;
+  handle.addEventListener('click', () => panel.classList.toggle('sheet-open'));
+  let _ty = 0;
+  panel.addEventListener('touchstart', e => { _ty = e.touches[0].clientY; }, { passive: true });
+  panel.addEventListener('touchend', e => {
+    const dy = _ty - e.changedTouches[0].clientY;
+    if (dy > 40) panel.classList.add('sheet-open');
+    else if (dy < -40) panel.classList.remove('sheet-open');
+  }, { passive: true });
+})();
 </script>
 </body>
 </html>
