@@ -861,21 +861,12 @@ const scratch = document.createElement('canvas');
 // SVG → 3D exit transition
 // ---------------------------------------------------------------------------
 async function runSvgTo3dTransition(): Promise<void> {
-  const ov  = document.getElementById('transition-overlay') as HTMLCanvasElement;
-  const ctx = ov.getContext('2d')!;
-  const W = window.innerWidth, H = window.innerHeight;
-  ov.width = W; ov.height = H;
-  ov.style.display = 'block';
-  ov.style.opacity = '1';
-  ov.style.transition = '';
-
-  // Simple fade-to-dark — the SVG cover in the 3D viewer handles the rest
-  await animPhase(300, t => {
-    const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-    ctx.fillStyle = `rgba(13,14,18,${ease})`;
-    ctx.fillRect(0, 0, W, H);
-  });
-  ctx.fillStyle = '#0d0e12'; ctx.fillRect(0, 0, W, H);
+  // Snapshot the SVG viewport rect so 3d-viewer can start its cover in the
+  // exact same screen position — no fade needed, the cover provides continuity.
+  const r = svgVp.getBoundingClientRect();
+  sessionStorage.setItem('hoas_svg_entry', JSON.stringify(
+    { x: r.left, y: r.top, w: r.width, h: r.height }
+  ));
 }
 
 // ---------------------------------------------------------------------------

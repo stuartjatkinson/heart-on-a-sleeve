@@ -29,11 +29,12 @@
     #load-msg  { font-size: 11px; color: var(--text-dim); white-space: nowrap; min-width: 140px; }
     #load-bar-wrap { flex: 1; height: 3px; border-radius: 2px; width: auto; }
     #load-bar  { background: linear-gradient(90deg,#4a9eff,#88c4ff); transition: none; }
-    /* SVG cover — keeps the source SVG visible until OSM meshes are built */
+    /* SVG cover — starts at the source SVG viewport rect (set by inline script),
+       then animates to the 3D plate position once OSM meshes are built. */
     #svg-cover {
-      position: absolute; inset: 0; width: 100%; height: 100%;
-      object-fit: contain; background: #0d0e12;
-      z-index: 8; transition: opacity 0.7s ease;
+      position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
+      object-fit: contain; background: transparent;
+      z-index: 8;
     }
 
     @media (max-width: 900px) {
@@ -149,6 +150,22 @@
 </div>
 <div id="canvas-wrap">
   <img id="svg-cover" alt="">
+  <script>
+  // Runs synchronously before first paint — positions cover at source SVG rect
+  // for a seamless page-to-page transition (no flash).
+  (function() {
+    var e = null;
+    try { e = JSON.parse(sessionStorage.getItem('hoas_svg_entry') || 'null'); } catch(err) {}
+    sessionStorage.removeItem('hoas_svg_entry');
+    var c = document.getElementById('svg-cover');
+    if (c && e) {
+      c.style.left = e.x + 'px'; c.style.top = e.y + 'px';
+      c.style.width = e.w + 'px'; c.style.height = e.h + 'px';
+    }
+    // Stash for the later animation step
+    window._svgEntry = e;
+  })();
+  </script>
   <div id="loading">
     <div id="load-msg">Initialising…</div>
     <div id="load-bar-wrap"><div id="load-bar"></div></div>
@@ -364,12 +381,10 @@ const statsEl  = document.getElementById('stats');
 function setLoad(msg) { loadMsg.textContent = msg; }
 function setStatus(msg)    { statusEl.textContent = msg; }
 
-// ── Entry animation — set materials to wireframe immediately ──────────────────
-const animMats = [matRoad, matRoadMn, matWater, matPark, matBldgLo, matBldgMid, matBldgHi];
+// ── Entry animation — buildings only (SVG texture handles land/water/roads) ───
+const animMats = [matBldgLo, matBldgMid, matBldgHi];
 const animGroups = [
-  { mats: [matWater, matPark],                offset: 0   },
-  { mats: [matRoad,  matRoadMn],              offset: 350 },
-  { mats: [matBldgLo, matBldgMid, matBldgHi], offset: 700 },
+  { mats: [matBldgLo, matBldgMid, matBldgHi], offset: 0 },
 ];
 animMats.forEach(m => { m.wireframe = true; m.transparent = true; m.opacity = 0; m.color.set(m._wireColor); });
 scene.background.set(0x000000);
@@ -579,37 +594,13 @@ setLoad('Rendering features…');
 const ROAD_W    = { motorway:8, trunk:7, primary:6, secondary:5,
                     tertiary:4, residential:3, unclassified:3, service:2, living_street:2.5 };
 const ROAD_MAIN = new Set(['motorway','trunk','primary','secondary']);
-let nBuildings = 0, nRoads = 0;
+let nBuildings = 0;
 
 for (const way of ways) {
   const tags = way.tags ?? {};
-  const pts  = wayPts(way);
-
-  if (tags.landuse === 'park'  || tags.landuse === 'recreation_ground' ||
-      tags.landuse === 'grass' || tags.landuse === 'meadow' ||
-      tags.leisure === 'park'  || tags.leisure === 'garden' || tags.leisure === 'common') {
-    const m = polyMesh(pts, 0.1, matPark);
-    if (m) osmGroup.add(m);
-    continue;
-  }
-  if (tags.natural === 'water' || tags.landuse === 'reservoir') {
-    const m = polyMesh(pts, 0.05, matWater);
-    if (m) osmGroup.add(m);
-    continue;
-  }
-  if (tags.waterway) {
-    const w = tags.waterway === 'river' ? 8 : tags.waterway === 'canal' ? 5 : 2;
-    const m = roadMesh(pts, w, 0.05, matWater);
-    if (m) osmGroup.add(m);
-    continue;
-  }
-  if (tags.highway && ROAD_W[tags.highway]) {
-    const m = roadMesh(pts, ROAD_W[tags.highway], 0.2,
-                       ROAD_MAIN.has(tags.highway) ? matRoadMn : matRoad);
-    if (m) { osmGroup.add(m); nRoads++; }
-    continue;
-  }
+  // Roads, water, parks are shown by the SVG ground texture — only extrude buildings.
   if (tags.building && tags.building !== 'no') {
+    const pts  = wayPts(way);
     const levels = parseFloat(tags['building:levels'] ?? '2');
     const height = parseFloat(tags['building:height'] ?? String(levels * 3.2));
     const m = buildingMesh(pts, Math.max(height, 3));
@@ -623,38 +614,50 @@ if (preElapsed < minPreload) await new Promise(r => setTimeout(r, minPreload - p
 
 controls.update();
 setStatus('');
-statsEl.textContent = `${nBuildings} buildings · ${nRoads} roads`;
+statsEl.textContent = `${nBuildings} buildings`;
 setLoad('Building scene…');
 entryReady = true; // hand off to tickEntry — bar takes over at 50 %
-// SVG cover: shrink to match the 3D ground plate in screen space, then fade out
+
+// SVG cover: translate in 3D space from its source position onto the ground plate.
 if (svgCover) {
-  const cW = canvasWrap.clientWidth || (innerWidth - 272);
-  const cH = innerHeight;
-  const hw = sceneW / 2, hd = sceneD / 2;
+  // Project ground plate corners to viewport (fixed) coords.
+  const cr  = canvasWrap.getBoundingClientRect();
+  const hw  = sceneW / 2, hd = sceneD / 2;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [cx, cz] of [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]]) {
-    const n = new THREE.Vector3(cx, 0, cz).project(camera);
-    const sx = (n.x + 1) / 2 * cW, sy = (-n.y + 1) / 2 * cH;
+  for (const [pcx, pcz] of [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]]) {
+    const n  = new THREE.Vector3(pcx, 0, pcz).project(camera);
+    const sx = (n.x + 1) / 2 * cr.width  + cr.left;
+    const sy = (-n.y + 1) / 2 * cr.height + cr.top;
     if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
     if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
   }
+  // Target rect (plate in screen space)
   const tx = minX, ty = minY, tw = maxX - minX, th = maxY - minY;
-  svgCover.style.transition = 'none';
-  svgCover.style.inset = 'auto';
-  svgCover.style.left = '0px'; svgCover.style.top = '0px';
-  svgCover.style.width = cW + 'px'; svgCover.style.height = cH + 'px';
-  const t0cover = performance.now(), SHRINK_MS = 650;
+
+  // Source rect — where the SVG was in the 2D viewer (stored before navigation)
+  const src = window._svgEntry || { x: cr.left, y: cr.top, w: cr.width, h: cr.height };
+
+  const t0cover = performance.now(), SHRINK_MS = 750;
   (function shrink(now) {
-    const p = Math.min(1, (now - t0cover) / SHRINK_MS);
-    const ease = 1 - Math.pow(1 - p, 3);
-    svgCover.style.left   = (tx * ease) + 'px';
-    svgCover.style.top    = (ty * ease) + 'px';
-    svgCover.style.width  = (cW + (tw - cW) * ease) + 'px';
-    svgCover.style.height = (cH + (th - cH) * ease) + 'px';
-    if (p < 1) { requestAnimationFrame(shrink); return; }
-    svgCover.style.transition = 'opacity 0.35s ease';
+    const prog = Math.min(1, (now - t0cover) / SHRINK_MS);
+    const ease = 1 - Math.pow(1 - prog, 3); // cubic ease-out
+
+    svgCover.style.left   = (src.x + (tx - src.x) * ease) + 'px';
+    svgCover.style.top    = (src.y + (ty - src.y) * ease) + 'px';
+    svgCover.style.width  = (src.w + (tw - src.w) * ease) + 'px';
+    svgCover.style.height = (src.h + (th - src.h) * ease) + 'px';
+
+    // Tilt the SVG as it "lands" on the horizontal plane
+    const tilt = ease * 28;
+    svgCover.style.transform       = `perspective(1400px) rotateX(${tilt}deg)`;
+    svgCover.style.transformOrigin = '50% 100%';
+
+    if (prog < 1) { requestAnimationFrame(shrink); return; }
+
+    svgCover.style.transform = '';
+    svgCover.style.transition = 'opacity 0.4s ease';
     svgCover.style.opacity = '0';
-    setTimeout(() => { if (svgCover.parentNode) svgCover.remove(); }, 400);
+    setTimeout(() => { if (svgCover && svgCover.parentNode) svgCover.remove(); }, 450);
   })(performance.now());
 }
 
