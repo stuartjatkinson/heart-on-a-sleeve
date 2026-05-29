@@ -887,7 +887,7 @@ const SVG_COLOUR_DEFS = [
     swatches: ['#FFFFFF','#C8C8C8','#F8E040','#E8A820','#E84848','#C82020'] },
 ];
 const svgSelIdx = SVG_COLOUR_DEFS.map(() => 0);
-let svgInclLabels = true, svgInclBuildings = true;
+const svgInclLabels = true, svgInclBuildings = true;
 let svgNatW = 0, svgNatH = 0, svgTx = 0, svgTy = 0, svgScl = 1;
 let svgCurrentUrl = '';
 let svgCurrentStl: any = null;
@@ -1081,17 +1081,6 @@ document.getElementById('svg-btn-100')!.addEventListener('click', () => {
   svgApply();
 });
 
-document.getElementById('svg-tog-labels')!.addEventListener('click', function(this: HTMLElement) {
-  this.classList.toggle('on');
-  svgInclLabels = this.classList.contains('on');
-  svgScheduleRegen();
-});
-document.getElementById('svg-tog-buildings')!.addEventListener('click', function(this: HTMLElement) {
-  this.classList.toggle('on');
-  svgInclBuildings = this.classList.contains('on');
-  svgScheduleRegen();
-});
-
 svg3dBtn.addEventListener('click', async () => {
   if (!confirmed) return;
   const bbox = rotSelAabb(confirmed);
@@ -1126,6 +1115,14 @@ svg3dBtn.addEventListener('click', async () => {
   if (svgCurrentStl?.stl_buildings_url) p.set('stl_buildings', svgCurrentStl.stl_buildings_url);
   if (svgCurrentStl?.stl_land_url)      p.set('stl_land',      svgCurrentStl.stl_land_url);
   if (svgCurrentStl?.stl_water_url)     p.set('stl_water',     svgCurrentStl.stl_water_url);
+
+  // Persist state so "← SVG View" in 3d-viewer can restore this page without regenerating
+  sessionStorage.setItem('hoas_return_state', JSON.stringify({
+    svgUrl: svgParamUrl,
+    bbox: { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north },
+    merch: merchType, coasterShape, stl: svgCurrentStl,
+  }));
+
   window.location.href = `/3d-viewer.html?${p}`;
 });
 
@@ -1585,12 +1582,8 @@ async function loadDesign(project: any): Promise<void> {
     }
   }
 
-  // Restore palette and include flags
+  // Restore palette
   if (project.palette_overrides) restorePalette(project.palette_overrides);
-  svgInclLabels    = project.include_labels    ?? true;
-  svgInclBuildings = project.include_buildings ?? true;
-  document.getElementById('svg-tog-labels')!   .classList.toggle('on', svgInclLabels);
-  document.getElementById('svg-tog-buildings')!.classList.toggle('on', svgInclBuildings);
 
   // Restore bbox selection on map
   const bbox: BBox = project.bbox;
@@ -1648,3 +1641,44 @@ async function loadDesign(project: any): Promise<void> {
 // ---------------------------------------------------------------------------
 genBtn.onclick = generate;
 document.querySelectorAll<HTMLElement>('.merch-btn').forEach(el => el.addEventListener('click', () => selectMerch(el)));
+
+// ---------------------------------------------------------------------------
+// Return-state restore — navigating back from 3d-viewer restores the SVG view
+// ---------------------------------------------------------------------------
+
+// If the page was restored from bfcache, JS state is already intact — discard
+// the sessionStorage item so it doesn't affect the next fresh load.
+window.addEventListener('pageshow', (e: PageTransitionEvent) => {
+  if (e.persisted) sessionStorage.removeItem('hoas_return_state');
+});
+
+(async () => {
+  const raw = sessionStorage.getItem('hoas_return_state');
+  if (!raw) return;
+  sessionStorage.removeItem('hoas_return_state');
+  try {
+    const s = JSON.parse(raw) as {
+      svgUrl: string;
+      bbox: { west: number; south: number; east: number; north: number };
+      merch: string; coasterShape: string;
+      stl: typeof svgCurrentStl;
+    };
+    // Restore merch type (variable + button UI, without clearing the cache)
+    merchType = s.merch;
+    document.querySelectorAll<HTMLElement>('.merch-btn').forEach(el =>
+      el.classList.toggle('active', el.dataset.type === s.merch));
+    // Reconstruct selection from bbox
+    confirmed = bboxToRotSel(s.bbox);
+    _live = { ...confirmed };
+    // Fetch SVG text so colour-picker can regenerate
+    let svgText = '';
+    try {
+      const r = await fetch(s.svgUrl);
+      if (r.ok) svgText = await r.text();
+    } catch { /* fall through — SVG image still loads via URL */ }
+    _cachedSvgResult = { svg_url: s.svgUrl, svgText };
+    // Open SVG view directly — no transition needed coming back from 3D
+    document.getElementById('panel')!.style.visibility = 'hidden';
+    await openSvgView(s.svgUrl, svgText, s.stl);
+  } catch { /* silent — fall through to normal load */ }
+})();

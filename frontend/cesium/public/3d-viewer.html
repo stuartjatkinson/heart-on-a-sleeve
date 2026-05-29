@@ -67,7 +67,7 @@
 <body>
 <div id="panel3d" class="panel">
   <div class="sheet-handle" id="panel3d-handle"></div>
-  <button class="btn" onclick="window.location.href='/'" style="margin-bottom:8px">← SVG View</button>
+  <button class="btn" onclick="history.back()" style="margin-bottom:8px">← SVG View</button>
   <h2>3D Map Preview</h2>
   <div id="status">Loading…</div>
   <div id="stats"></div>
@@ -390,29 +390,54 @@ animMats.forEach(m => { m.wireframe = true; m.transparent = true; m.opacity = 0;
 scene.background.set(0x000000);
 if (scene.fog) scene.fog.color.set(0x000000);
 
-let entryStart = null;
+let entryStart    = null;
+let barStart      = 0;   // bar % at the moment entryReady fires
+let barFinishing  = false;
 const WIRE_MS  = 2200;
 const PAUSE_MS = 300;
 const FILL_MS  = 2500;
 const TOTAL_MS = WIRE_MS + PAUSE_MS + FILL_MS; // 5 000 ms post-load animation
 
 function tickEntry(now) {
-  if (entryStart === null) entryStart = now;
+  if (entryStart === null) {
+    entryStart = now;
+    barStart   = parseFloat(loadBar.style.width) || 0;
+  }
   const elapsed = now - entryStart;
-  // Drive progress bar: 50 % → 100 % over TOTAL_MS
-  loadBar.style.width = (50 + Math.min(1, elapsed / TOTAL_MS) * 50) + '%';
+
+  // Progress bar: barStart → 97 % over TOTAL_MS, then 200 ms smooth finish
+  if (elapsed < TOTAL_MS && !barFinishing) {
+    const t = elapsed / TOTAL_MS;
+    loadBar.style.width = (barStart + (97 - barStart) * t).toFixed(1) + '%';
+  }
 
   if (elapsed >= TOTAL_MS) {
+    // Finalise visual animation
     animMats.forEach(m => { m.wireframe = false; m.transparent = false; m.opacity = 1; m.color.set(m._solidColor); });
     scene.background.set(BG);
     if (scene.fog) scene.fog.color.set(BG);
-    document.getElementById('loading').style.display = 'none';
-    // Ensure ground is fully visible by end of animation (in case fade-in hasn't finished)
     if (matGround.map) { matGround.color.set(0xffffff); matGround.needsUpdate = true; }
-    // For fabric/transfer types, auto-show the SVG base layer after the entry animation
     if (!is3dPrint && svgUrl && !showingPreview) {
       const btn = document.getElementById('btn-mode');
       if (btn) btn.click();
+    }
+    // 200 ms ramp 97 % → 100 %, then fade the loading strip out
+    if (!barFinishing) {
+      barFinishing = true;
+      const t0f = performance.now();
+      const loadEl = document.getElementById('loading');
+      (function barFinish(n) {
+        const t = Math.min(1, (n - t0f) / 200);
+        loadBar.style.width = (97 + 3 * t) + '%';
+        if (t < 1) { requestAnimationFrame(barFinish); return; }
+        loadEl.style.transition = 'opacity 0.3s';
+        loadEl.style.opacity = '0';
+        setTimeout(() => {
+          loadEl.style.display = 'none';
+          loadEl.style.opacity = '1';
+          loadEl.style.transition = '';
+        }, 350);
+      })(performance.now());
     }
     return true;
   }
