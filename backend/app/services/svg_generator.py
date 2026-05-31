@@ -145,6 +145,7 @@ class SVGGenerator:
         self._bbox: tuple[float, float, float, float] = (-0.13, 51.50, -0.11, 51.52)
         self._svg_w: int = 3000
         self._svg_h: int = 4000
+        self._line_scale: float = 1.0
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -167,6 +168,15 @@ class SVGGenerator:
         self._svg_w = spec['width_px']
         self._svg_h = spec['height_px']
         self._bbox  = bbox or self._bbox_from_nodes()
+
+        # Scale line widths to the actual map density.
+        # ROAD_WIDTH values are calibrated for a 1000px canvas over ~2km wide (0.5 px/m).
+        # Larger areas have fewer px/m so strokes must shrink proportionally, or thick
+        # major roads will overlap and bury adjacent minor roads at the display scale.
+        west, south, east, north = self._bbox
+        _cos = math.cos(math.radians((south + north) / 2))
+        _bbox_w_m = max((east - west) * _cos * 111_320, 1.0)
+        self._line_scale = min(max((self._svg_w / _bbox_w_m) / 0.5, 0.15), 2.5)
 
         palette = dict(STYLES.get(style, STYLES['osm_default']))
         if palette_overrides:
@@ -321,9 +331,9 @@ class SVGGenerator:
             elif ww in WATERWAY_LINE:
                 pts = self._way_points(way)
                 if len(pts) >= 2:
-                    w = WATERWAY_LINE_WIDTH.get(ww, 1.5)
+                    w = max(0.4, WATERWAY_LINE_WIDTH.get(ww, 1.5) * self._line_scale)
                     self._g.add(svg.path(d=self._path_d(pts),
-                                        stroke=color, stroke_width=w,
+                                        stroke=color, stroke_width=round(w, 2),
                                         fill='none', stroke_linecap='round',
                                         stroke_linejoin='round'))
 
@@ -338,7 +348,18 @@ class SVGGenerator:
             self._g.add(svg.path(d=self._path_d(pts, close=True),
                                 fill=p['building'], stroke='none'))
 
+    # Draw order: paths (0) → minor (1) → major (2) so thick roads sit on top.
+    _ROAD_TIER = {
+        'footway': 0, 'cycleway': 0, 'path': 0, 'steps': 0,
+        'bridleway': 0, 'track': 0, 'pedestrian': 1,
+        'living_street': 1, 'service': 1, 'unclassified': 1,
+        'residential': 1, 'road': 1,
+        'tertiary': 2, 'secondary': 2, 'primary': 2,
+        'trunk': 2, 'motorway': 2,
+    }
+
     def _draw_roads(self, svg: svgwrite.Drawing, p: dict) -> None:
+        collected: list[tuple[int, str, str, dict]] = []
         for way in self.ways:
             tags = way.get('tags', {})
             hw = tags.get('highway')
@@ -358,13 +379,18 @@ class SVGGenerator:
             else:
                 continue
 
+            tier = self._ROAD_TIER.get(hw, 1)
+            collected.append((tier, hw, color, way))
+
+        collected.sort(key=lambda x: x[0])
+
+        for _, hw, color, way in collected:
             pts = self._way_points(way)
             if len(pts) < 2:
                 continue
-
-            w = ROAD_WIDTH.get(hw, 1.5)
+            w = max(0.4, ROAD_WIDTH.get(hw, 1.5) * self._line_scale)
             self._g.add(svg.path(d=self._path_d(pts),
-                                stroke=color, stroke_width=w,
+                                stroke=color, stroke_width=round(w, 2),
                                 fill='none', stroke_linecap='round',
                                 stroke_linejoin='round'))
 
@@ -377,9 +403,9 @@ class SVGGenerator:
             pts = self._way_points(way)
             if len(pts) < 2:
                 continue
-            w = RAILWAY_WIDTH.get(rw, 1.5)
+            w = max(0.4, RAILWAY_WIDTH.get(rw, 1.5) * self._line_scale)
             self._g.add(svg.path(d=self._path_d(pts),
-                                stroke=p['railway'], stroke_width=w,
+                                stroke=p['railway'], stroke_width=round(w, 2),
                                 fill='none', stroke_linecap='butt',
                                 stroke_linejoin='round'))
 
