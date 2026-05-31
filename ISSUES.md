@@ -4,6 +4,26 @@
 
 - [ ] **Local dev: port 8000 blocked by WSL SSH tunnel** — `ssh` process in Ubuntu WSL binds 127.0.0.1:8000 preventing Docker backend from being reached via `localhost:8000`; only affects Vite dev-server workflow; `--profile full` (nginx) unaffected as it uses internal Docker network. Kill tunnel or temporarily remap docker-compose port *(found 2026-05-28)*
 
+## Open
+
+## Resolved (2026-05-30 session)
+
+- [x] **Water crosshatch removed** — was applying everywhere; removed `_apply_crosshatch` entirely; water is now a solid slab; slicer handles infill/material saving *(resolved 2026-05-31)*
+- [x] **Layer heights now equal thirds for flat-top coaster** — buildings 0→4mm, water 1.33→2.67mm, land 2.67→4mm; land has no collar ring (collar belongs to buildings layer only); assembled top surface is flat everywhere except water features (recessed 1.33mm) *(resolved 2026-05-31)*
+- [x] **Buildings triangular from simplify+gap-close merge** — removed `poly.simplify(0.4)` and the buffer-in/buffer-out gap-close pass; each building polygon extruded individually; `bldg_union` is now a plain `unary_union` for hole-punching water/land *(resolved 2026-05-30)*
+- [x] **Solid single-piece STL added** — `_build` now returns a fourth `solid` key; same geometry as 3-piece but with solid (no crosshatch) water layer; downloads as `solid.stl` with a green-tinted button in the panel *(resolved 2026-05-30)*
+- [x] **3D viewer iframe replaced with single-page inline viewer** — removed `<iframe id="viewer-3d-frame">`, added `#viewer-3d-view` div + `viewer3d.ts` Viewer3D class; dynamic import in `app.ts` creates instance on first use; `loadScene()` rebuilds Three.js scene in-place each call; `← SVG View` button hides the overlay *(resolved 2026-05-30)*
+- [x] **2D→3D not reversible** — with inline viewer the SVG view simply stays under z-index 9999; `btn-3d-back` sets `display:none` restoring the SVG panel with no page reload *(resolved 2026-05-30)*
+- [x] **`style.display = ''` bug on btn-back-from-3d** — btn-back-from-3d removed entirely; back is now `btn-3d-back` inside `#panel3d` wired directly in `app.ts` *(resolved 2026-05-30)*
+
+## Resolved (2026-05-29 session)
+
+- [x] **Auth guard doesn't detect expired JWT** — added `atob` payload decode + `exp` field check; clears token and redirects to login if expired or malformed *(resolved 2026-05-29)*
+- [x] **SVG generation transition ~3s minimum** — reduced forward-zoom TAU from 2200ms to 600ms; lowered exit threshold from 0.82 to 0.75 → minimum ~830ms *(resolved 2026-05-29)*
+- [x] **3D SVG animation is CSS overlay, misses aim, flickers** — replaced CSS shrink/tilt animation with THREE.js PlaneGeometry fold: pivot at scene south edge, rotates -PI/2 from vertical to flat over 600ms, fades out over 400ms *(resolved 2026-05-29)*
+- [x] **Print preview baseplate misaligned** — `bpMesh.position.set(centre.x/scaleX, bldLocalMinY-bpH/2, centre.z/scaleZ)` uses STL footprint centre; fixed in previous session, needs Docker rebuild *(resolved 2026-05-29)*
+- [x] **Water STL only covers water bodies instead of full base disc** — `_water_piece` now uses full `plate_shape` minus urban as the base layer; land lid sits on top in non-water areas *(resolved 2026-05-29)*
+
 ## Resolved
 
 - [x] **Cloud Run auth/sign-in broken — database tables never created** — `Base.metadata.create_all` added to `lifespan` in router.py; runs on every container startup so Cloud Run bootstraps its own schema *(resolved 2026-05-26)*

@@ -365,12 +365,13 @@ document.getElementById('btn-3d').addEventListener('click', () => {
     const p = new URLSearchParams({
       west: String(west), south: String(south),
       east: String(east), north: String(north),
-      merch, style: 'osm_default',
+      merch, style: 'osm_default', coaster_shape: coasterShape,
     });
     if (stlBuildings)  p.set('stl_buildings', stlBuildings);
     if (stlLand)       p.set('stl_land',      stlLand);
     if (stlWater)      p.set('stl_water',     stlWater);
     if (currentSvgUrl) p.set('svg',           currentSvgUrl);
+    try { localStorage.setItem('hoas_palette_overrides', JSON.stringify(buildOverrides())); } catch {}
     window.location.href = `/3d-viewer.html?${p}`;
   }, 650);
 });

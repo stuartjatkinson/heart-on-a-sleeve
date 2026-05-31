@@ -17,6 +17,67 @@ class OverpassError(Exception):
 _MIRROR = "https://overpass.kumi.systems/api/interpreter"
 
 
+def _build_query(bb: str, km2: float, timeout: int, force_buildings: bool = False) -> str:
+    """Return a tiered Overpass QL query scaled to the drawn area."""
+    if km2 < 0.8:
+        # Tier 0 — very small: everything including footpaths and service roads
+        features = f"""
+  way["highway"]({bb});
+  way["landuse"]({bb});
+  way["leisure"]({bb});
+  way["natural"]({bb});
+  way["building"]({bb});
+  way["waterway"]({bb});
+  way["railway"]({bb});
+  relation["natural"]({bb});
+  relation["landuse"]({bb});
+  node["place"~"city|town|village|hamlet|suburb|neighbourhood|quarter|island"]({bb});"""
+    elif km2 < 4:
+        # Tier 1 — neighbourhood: roads ≥ service, buildings, full water/landuse
+        features = f"""
+  way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|road"]({bb});
+  way["landuse"]({bb});
+  way["leisure"~"park|garden|nature_reserve|common|recreation_ground|playing_fields"]({bb});
+  way["natural"~"water|wood|scrub|heath|grassland|fell|sand|beach|wetland"]({bb});
+  way["building"]({bb});
+  way["waterway"~"river|canal|stream|drain|ditch"]({bb});
+  way["railway"~"rail|tram|subway|light_rail|narrow_gauge"]({bb});
+  node["place"~"city|town|village|hamlet|suburb|neighbourhood|quarter"]({bb});"""
+    elif km2 < 15:
+        # Tier 2 — small city chunk: roads ≥ tertiary, no buildings
+        features = f"""
+  way["highway"~"motorway|trunk|primary|secondary|tertiary"]({bb});
+  way["landuse"]({bb});
+  way["leisure"~"park|garden|nature_reserve|common|recreation_ground"]({bb});
+  way["natural"~"water|wood|scrub|heath|grassland"]({bb});
+  way["waterway"~"river|canal|stream"]({bb});
+  way["railway"~"rail|subway|light_rail"]({bb});
+  node["place"~"city|town|village|hamlet|suburb"]({bb});"""
+    elif km2 < 60:
+        # Tier 3 — large town / city: primary roads+, major water, broad landuse
+        features = f"""
+  way["highway"~"motorway|trunk|primary|secondary"]({bb});
+  way["landuse"~"residential|industrial|commercial|retail|forest|farmland|meadow|grass"]({bb});
+  way["leisure"~"park|nature_reserve"]({bb});
+  way["natural"~"water|wood"]({bb});
+  way["waterway"~"river|canal"]({bb});
+  way["railway"~"rail"]({bb});
+  node["place"~"city|town|village"]({bb});"""
+    else:
+        # Tier 4 — large region: motorway/trunk/primary only
+        features = f"""
+  way["highway"~"motorway|trunk|primary"]({bb});
+  way["landuse"~"residential|industrial|forest|farmland"]({bb});
+  way["natural"~"water|wood"]({bb});
+  way["waterway"~"river|canal"]({bb});
+  node["place"~"city|town"]({bb});"""
+
+    if force_buildings and f'way["building"]({bb})' not in features:
+        features += f'\n  way["building"]({bb});'
+
+    return f"[out:json][timeout:{timeout}];\n(\n{features}\n);\nout body;\n>;\nout skel qt;\n"
+
+
 class OSMFetcher:
     """Fetches OSM data via Overpass API with a single-shot mirror fallback."""
 
@@ -29,9 +90,9 @@ class OSMFetcher:
         self._cache: dict[tuple, tuple[dict, float]] = {}
         self._cache_ttl = 300  # 5-minute TTL so colour regens are instant
 
-    async def fetch_area(self, bbox: BBox, timeout: int = 60) -> dict:
+    async def fetch_area(self, bbox: BBox, timeout: int = 60, force_buildings: bool = False) -> dict:
         key = (round(bbox.west, 5), round(bbox.south, 5),
-               round(bbox.east, 5), round(bbox.north, 5))
+               round(bbox.east, 5), round(bbox.north, 5), force_buildings)
         cached = self._cache.get(key)
         if cached and (time.time() - cached[1] < self._cache_ttl):
             data = cached[0]
@@ -39,27 +100,10 @@ class OSMFetcher:
             return data
 
         bb = f"{bbox.south},{bbox.west},{bbox.north},{bbox.east}"
-        query = f"""
-        [out:json][timeout:{timeout}];
-        (
-          way["highway"]({bb});
-          way["landuse"]({bb});
-          way["leisure"]({bb});
-          way["natural"]({bb});
-          way["building"]({bb});
-          way["waterway"]({bb});
-          way["railway"]({bb});
-          relation["natural"]({bb});
-          relation["landuse"]({bb});
-          node["place"~"city|town|village|hamlet|suburb|neighbourhood|quarter|island"]({bb});
-        );
-        out body;
-        >;
-        out skel qt;
-        """
-        headers = {"User-Agent": "heart-on-a-sleeve/1.0", "Accept": "*/*"}
         cos_lat = math.cos((bbox.south + bbox.north) / 2 * math.pi / 180)
         km2 = round((bbox.east - bbox.west) * cos_lat * 111.32 * (bbox.north - bbox.south) * 111.32, 2)
+        query = _build_query(bb, km2, timeout, force_buildings=force_buildings)
+        headers = {"User-Agent": "heart-on-a-sleeve/1.0", "Accept": "*/*"}
 
         last_error: OverpassError | None = None
         for endpoint in self._endpoints:

@@ -5,10 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Heart on a Sleeve — Map Selector</title>
     <script>
-      // Auth guard — redirect to login before anything renders
-      if (!localStorage.getItem('hoas_token')) {
-        location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
-      }
+      // Auth guard — decode JWT and check expiry before anything renders
+      (function() {
+        var token = localStorage.getItem('hoas_token');
+        if (!token) {
+          location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
+          return;
+        }
+        try {
+          var payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+          if (payload.exp && payload.exp * 1000 < Date.now()) {
+            localStorage.removeItem('hoas_token');
+            localStorage.removeItem('hoas_refresh');
+            location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
+          }
+        } catch (e) {
+          localStorage.removeItem('hoas_token');
+          localStorage.removeItem('hoas_refresh');
+          location.replace('/login.html?returnTo=' + encodeURIComponent(location.href));
+        }
+      })();
     </script>
     <link rel="stylesheet" href="/app.css">
     <style>
@@ -144,15 +160,15 @@
         #designs-logout { color: #e06060; border-color: var(--border-dim); }
         #designs-logout:hover { border-color: #e06060; background: rgba(224,96,96,0.08); }
 
-        /* My Designs FAB */
-        #designs-fab {
-            position: fixed; top: 20px; right: 20px; z-index: 9999;
-            background: var(--bg-item); border: 1.5px solid var(--border-item);
-            color: var(--text-mid); border-radius: var(--radius-btn);
-            padding: 8px 14px; font-size: 13px; font-family: inherit;
-            cursor: pointer; transition: all 0.12s;
-        }
-        #designs-fab:hover { border-color: var(--accent); color: var(--accent); }
+        /* Save section — lives at bottom of svg-side panel */
+        #svg-save-section { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+        #svg-save-status { font-size: 11px; color: var(--text-mid); min-height: 14px; }
+
+        /* User nav rendered into .user-nav-slot */
+        .user-email-display { font-size: 11px; color: var(--text-dim); padding: 4px 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nav-designs-btn { margin-bottom: 4px; }
+        .nav-logout-btn { color: #e06060 !important; border-color: var(--border-dim) !important; }
+        .nav-logout-btn:hover { border-color: #e06060 !important; background: rgba(224,96,96,0.08) !important; }
 
         /* Save + user nav */
         .save-input {
@@ -166,6 +182,20 @@
         #svg-save-status { font-size: 11px; color: var(--text-mid); min-height: 14px; margin-top: 4px; }
         #svg-save-pending-hint { font-size: 11px; color: var(--text-dim); padding: 8px 0 4px; }
         .user-nav-slot { display: flex; flex-direction: column; gap: 4px; }
+
+        /* ── Inline 3D viewer ── */
+        #viewer-3d-view {
+            position: fixed; inset: 0; z-index: 9999;
+            flex-direction: row; display: none;
+            background: var(--bg-page);
+        }
+        #panel3d {
+            width: 272px; flex-shrink: 0; height: 100vh;
+            overflow-y: auto; padding: 18px 14px 24px; box-sizing: border-box;
+        }
+        #canvas-wrap-3d { flex: 1; position: relative; overflow: hidden; }
+        #stl-links-3d { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+        #loading-3d { display: none; flex-direction: column; gap: 6px; padding: 8px 0; }
 
         /* ── My Designs floating panel ── */
         #designs-backdrop {
@@ -272,8 +302,22 @@
           /* Larger coaster cycle touch targets */
           .cycle-btn { width: 32px; height: 32px; font-size: 16px; }
 
-          /* Designs FAB — move below status bar safe area */
-          #designs-fab { top: 12px; right: 12px; }
+          #panel3d {
+            position: fixed !important;
+            bottom: 0; left: 0; right: 0; top: auto !important;
+            width: 100% !important; height: auto !important;
+            max-height: 75svh; max-height: 75vh;
+            border-radius: 14px 14px 0 0;
+            border-left: none; border-right: none; border-bottom: none;
+            padding-top: 10px;
+            transform: translateY(calc(100% - 80px));
+            transition: transform 0.3s cubic-bezier(.25,.8,.3,1);
+            z-index: 10000; overflow-y: auto;
+          }
+          #canvas-wrap-3d {
+            position: fixed !important; inset: 0;
+            width: 100% !important; height: 100svh !important; height: 100vh !important;
+          }
         }
     </style>
 </head>
@@ -333,6 +377,35 @@
 </div>
 
 <canvas id="transition-overlay"></canvas>
+<img id="svg-cover" style="display:none;position:fixed;z-index:9998;pointer-events:none;border-radius:4px;">
+
+<!-- Inline 3D viewer — single-page, no iframe -->
+<div id="viewer-3d-view">
+  <div id="panel3d" class="panel">
+    <div class="sheet-handle" id="panel3d-handle"></div>
+    <button class="btn" id="btn-3d-back">← SVG View</button>
+    <h2>3D Preview</h2>
+    <div id="status-3d" style="font-size:11px;color:var(--text-mid);min-height:14px;margin-bottom:4px;"></div>
+    <div id="stats-3d" style="font-size:11px;color:var(--text-dim);min-height:12px;margin-bottom:8px;"></div>
+    <div class="divider"></div>
+    <button class="btn" id="btn-3d-mode" style="display:none"></button>
+    <button class="btn" id="btn-3d-wire">⬡ Wireframe</button>
+    <button class="btn" id="btn-3d-rotate">▶ Auto-rotate</button>
+    <div id="loading-3d">
+      <div id="load-msg-3d" style="font-size:11px;color:var(--text-dim);"></div>
+      <div style="height:3px;background:var(--bg-item);border-radius:2px;overflow:hidden;">
+        <div id="load-bar-3d" style="height:100%;background:var(--accent);width:0%;transition:width 0.08s;border-radius:2px;"></div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <input type="text" class="save-input" id="stl-save-name" placeholder="Design name…">
+    <button class="btn" id="stl-save-btn">💾 Save Design</button>
+    <div id="stl-save-status" style="font-size:11px;color:var(--text-mid);min-height:14px;margin-top:4px;"></div>
+    <div class="divider"></div>
+    <div class="user-nav-slot" data-slot="3d"></div>
+  </div>
+  <div id="canvas-wrap-3d"></div>
+</div>
 
 <!-- ── Inline SVG viewer (shown after generate, no page navigation) ── -->
 <div id="svg-view">
@@ -352,16 +425,26 @@
         <div class="divider"></div>
         <a   class="btn" id="svg-btn-dl" download="design.svg">↓ Download SVG</a>
         <button class="btn" id="svg-btn-3d">◉ View 3D →</button>
+        <div id="stl-links-3d" style="display:none;flex-direction:column;gap:4px;margin-top:4px;">
+          <a class="btn" id="dl-solid-3d" download="solid.stl" style="border-color:#4a7a4a;color:#6aaa6a;">↓ Solid STL (1-colour)</a>
+          <a class="btn" id="dl-buildings-3d" download="buildings.stl">↓ Buildings STL</a>
+          <a class="btn" id="dl-land-3d" download="land.stl">↓ Land STL</a>
+          <a class="btn" id="dl-water-3d" download="water.stl">↓ Water STL</a>
+        </div>
         <div class="divider"></div>
         <div class="hint">Scroll — zoom<br>Left drag — pan</div>
+        <div class="divider"></div>
+        <div id="svg-save-section">
+            <input type="text" class="save-input" id="svg-save-name" placeholder="Design name…">
+            <button class="btn" id="svg-save-btn">💾 Save Design</button>
+            <div id="svg-save-status"></div>
+        </div>
+        <div class="user-nav-slot" data-slot="svg"></div>
     </div>
     <div id="svg-vp">
         <div id="svg-wrap"></div>
     </div>
 </div>
-
-<!-- My Designs FAB -->
-<button id="designs-fab" style="display:none">⊞ My Designs</button>
 
 <!-- My Designs floating panel -->
 <div id="designs-backdrop"></div>
@@ -371,16 +454,6 @@
     <button id="designs-close">×</button>
   </div>
   <div class="designs-hdr-email" id="designs-email"></div>
-  <button class="btn" id="designs-logout">↩ Logout</button>
-
-  <div id="designs-save-section" style="display:none">
-    <div class="divider"></div>
-    <div class="section-label" style="margin-top:8px">Save current design</div>
-    <input type="text" class="save-input" id="designs-save-name" placeholder="Design name…" style="margin-top:6px">
-    <button class="btn" id="designs-btn-save">💾 Save design</button>
-    <div id="designs-save-status"></div>
-  </div>
-
   <div class="divider"></div>
   <div id="designs-content"><div class="designs-loading">Loading…</div></div>
 </div>
@@ -404,6 +477,7 @@
   }
   initSheet('panel',    'panel-handle');
   initSheet('svg-side', 'svg-side-handle');
+  initSheet('panel3d',  'panel3d-handle');
 })();
 
 // ── SVG viewport touch pan + pinch zoom ───────────────────────────────────────

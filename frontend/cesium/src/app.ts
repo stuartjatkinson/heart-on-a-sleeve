@@ -453,6 +453,7 @@ function enterEditing(s: RotSel): void {
   handler.setInputAction((_e: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
     if (dragMode === 'none') return;
     confirmed = _live ? { ..._live } : null;
+    clearGeneratedState();
     dragMode = 'none'; dragMoveAnchor = null; dragMoveStart = null;
     dragResizeFixed = null; dragRotStart = null;
     viewer.scene.screenSpaceCameraController.enableRotate = true;
@@ -478,6 +479,36 @@ function updateBboxDisplay(): void {
 // ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
+function clearGeneratedState(): void {
+  if (svgCurrentUrl.startsWith('blob:')) URL.revokeObjectURL(svgCurrentUrl);
+  _cachedSvgResult = null;
+  _cachedOsmData = null;
+  svgCurrentStl = null;
+  svgCurrentUrl = '';
+  svgCurrentText = '';
+
+  document.getElementById('viewer-3d-view')!.style.display = 'none';
+  document.getElementById('stl-links-3d')!.style.display = 'none';
+
+  if (svgView.style.display !== 'none') {
+    svgView.style.display = 'none';
+    document.getElementById('svg-save-section')!.style.display = 'none';
+    (document.getElementById('svg-save-name') as HTMLInputElement).value = '';
+    (document.getElementById('svg-save-status') as HTMLElement).textContent = '';
+    document.getElementById('panel')!.style.visibility = 'visible';
+    const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
+    ov.style.display = 'none'; ov.style.opacity = '1'; ov.style.transition = '';
+    _transFrame = null; _transSel = null; _transPixCanvas = null;
+    _transFitBounds = null; _transSvgImg = null;
+  }
+
+  const _btn = document.getElementById('generate-btn') as HTMLButtonElement;
+  (document.getElementById('btn-text') as HTMLElement).textContent = 'Generate Design';
+  (document.getElementById('spinner') as HTMLElement).style.display = 'none';
+  _btn.disabled = !confirmed;
+  _btn.onclick = generate;
+}
+
 function selectMerch(el: HTMLElement): void {
   const newType = el.dataset.type!;
   const sameType = newType === merchType;
@@ -485,10 +516,7 @@ function selectMerch(el: HTMLElement): void {
   el.classList.add('active');
   merchType = newType;
 
-  // Drop cached SVG/STL when merch type changes — must regenerate
-  _cachedSvgResult = null;
-  _cachedOsmData = null;
-  svgCurrentStl = null;
+  clearGeneratedState();
 
   if (editState === 'editing' && !sameType) {
     // Different merch: update ratio, keep existing selection
@@ -681,7 +709,7 @@ async function runTransition(
 
   const BAR_H = 4, BAR_Y = H - 44, BAR_X = Math.round(W * 0.15), BAR_W = Math.round(W * 0.70);
   // Time constant for asymptotic approach — animation stays in perpetual motion
-  const TAU = 2_200;
+  const TAU = 600;
   const t0 = performance.now();
 
   await new Promise<void>(resolve => {
@@ -727,7 +755,7 @@ async function runTransition(
       const prog = svgDone ? 1 : Math.min(1, elapsed / Math.max(1, estimatedMs));
       drawProgressBar(ctx, BAR_X, BAR_Y, BAR_W, BAR_H, prog);
 
-      if (svgDone && t >= 0.82) { resolve(); return; }
+      if (svgDone && t >= 0.75) { resolve(); return; }
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
@@ -1028,11 +1056,13 @@ async function openSvgView(url: string, text: string, stlResult: any) {
   if (!is3d) { svgDlBtn.style.borderColor = '#4a9eff'; svgDlBtn.style.color = '#4a9eff'; }
   else        { svgDlBtn.style.borderColor = ''; svgDlBtn.style.color = ''; }
 
-  // Show save section in designs panel: immediately for 2D, or 3D when STL already present
-  const saveSection = document.getElementById('designs-save-section')!;
-  const saveStatus  = document.getElementById('designs-save-status')!;
+  // Show save section in sidebar: immediately for 2D, or 3D when STL already present
+  const saveSection = document.getElementById('svg-save-section')!;
+  const saveStatus  = document.getElementById('svg-save-status')!;
   saveStatus.textContent = '';
   saveSection.style.display = (!is3d || stlResult) ? '' : 'none';
+  // Show STL download links immediately if we already have them
+  if (is3d && stlResult) onStlReady();
 
   svgView.style.display = 'flex';
   // Wait two frames so the browser has done a layout pass before measuring clientWidth
@@ -1044,7 +1074,6 @@ async function openSvgView(url: string, text: string, stlResult: any) {
 // ── SVG viewer event listeners ────────────────────────────────────────────────
 document.getElementById('btn-back')!.addEventListener('click', async () => {
   svgView.style.display = 'none';
-  document.getElementById('designs-save-section')!.style.display = 'none';
   const panel = document.getElementById('panel')!;
   panel.style.visibility = 'visible';
   await runReverseTransition();
@@ -1073,49 +1102,44 @@ async function showCachedSvg(): Promise<void> {
   }
 }
 
+let _viewer3d: any = null;
+
 svg3dBtn.addEventListener('click', async () => {
   if (!confirmed) return;
   const bbox = rotSelAabb(confirmed);
+  const view3dEl = document.getElementById('viewer-3d-view')!;
+  view3dEl.style.display = 'flex';
 
-  // Persist blob URL to server (parallel with transition — blob dies on navigation)
-  let svgParamUrl = svgCurrentUrl;
-  const saveP = (svgCurrentText && svgCurrentUrl.startsWith('blob:'))
-    ? fetch('/api/save-svg', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ svg_text: svgCurrentText }),
-      }).then(async r => { if (r.ok) svgParamUrl = (await r.json()).svg_url; }).catch(() => {})
-    : Promise.resolve();
+  const r = svgVp.getBoundingClientRect();
 
-  // Cache OSM data so 3D viewer can skip the Overpass re-fetch
-  if (_cachedOsmData) {
-    try {
-      sessionStorage.setItem('hoas_osm_cache', JSON.stringify({
-        bbox: { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north },
-        data: _cachedOsmData,
-      }));
-    } catch { /* quota exceeded — 3D viewer will re-fetch */ }
+  if (!_viewer3d) {
+    const mod = await import('./viewer3d');
+    _viewer3d = new mod.Viewer3D(document.getElementById('canvas-wrap-3d')!);
   }
 
-  await Promise.all([runSvgTo3dTransition(), saveP]);
-
-  const p = new URLSearchParams({
-    svg: svgParamUrl,
-    west: String(bbox.west), south: String(bbox.south),
-    east: String(bbox.east), north: String(bbox.north),
-    merch: merchType, coaster_shape: coasterShape,
+  _viewer3d.loadScene({
+    west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north,
+    merch: merchType, coasterShape,
+    svgUrl: svgCurrentUrl || null,
+    svgEntryRect: { x: r.left, y: r.top, w: r.width, h: r.height },
+    osmData: _cachedOsmData ?? { elements: [] },
+    stlBuildings: svgCurrentStl?.stl_buildings_url ?? null,
+    stlLand: svgCurrentStl?.stl_land_url ?? null,
+    stlWater: svgCurrentStl?.stl_water_url ?? null,
+    stlSolid: svgCurrentStl?.stl_solid_url ?? null,
+    paletteOverrides: svgOverrides(),
   });
-  if (svgCurrentStl?.stl_buildings_url) p.set('stl_buildings', svgCurrentStl.stl_buildings_url);
-  if (svgCurrentStl?.stl_land_url)      p.set('stl_land',      svgCurrentStl.stl_land_url);
-  if (svgCurrentStl?.stl_water_url)     p.set('stl_water',     svgCurrentStl.stl_water_url);
 
-  // Persist state so "← SVG View" in 3d-viewer can restore this page without regenerating
-  sessionStorage.setItem('hoas_return_state', JSON.stringify({
-    svgUrl: svgParamUrl,
-    bbox: { west: bbox.west, south: bbox.south, east: bbox.east, north: bbox.north },
-    merch: merchType, coasterShape, stl: svgCurrentStl,
-  }));
+  if (svgCurrentText && svgCurrentUrl.startsWith('blob:')) {
+    fetch('/api/save-svg', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ svg_text: svgCurrentText }),
+    }).catch(() => {});
+  }
+});
 
-  window.location.href = `/3d-viewer.html?${p}`;
+document.getElementById('btn-3d-back')!.addEventListener('click', () => {
+  document.getElementById('viewer-3d-view')!.style.display = 'none';
 });
 
 // Pan/zoom on SVG viewport
@@ -1178,18 +1202,6 @@ async function generate(): Promise<void> {
 const abort = new AbortController();
   setTimeout(() => abort.abort(), 90_000);
 
-  // Call pre-flight estimate endpoint for accurate OSM + SVG + STL timing
-  const estimate = await fetchEstimate(bbox, merchType).catch(() => null);
-  const osmEstimatedMs = estimate?.osm_estimate_ms ?? estimateGenMs(bbox);
-  const estimatedMs = (estimate?.svg_estimate_ms ?? estimateGenMs(bbox)) + osmEstimatedMs;
-  const stlEstimatedMs = estimate?.stl_estimate_ms ?? 0;
-
-  // Show area complexity in status bar
-  if (estimate) {
-    const label: Record<string, string> = { low: 'Simple area', medium: 'Medium density', high: 'Complex area', very_high: 'Very complex — may be slow' };
-    status.textContent = `${estimate.area_km2} km² · ${(estimate.element_count / 1000).toFixed(1)}k elements · ${label[estimate.complexity] ?? estimate.complexity}`;
-  }
-
   async function fetchJson(url: string, body: object, signal?: AbortSignal) {
     const r = await fetch(url, {
       method: 'POST', signal,
@@ -1205,6 +1217,10 @@ const abort = new AbortController();
   }
 
   const bboxArr: [number, number, number, number] = [bbox.west, bbox.south, bbox.east, bbox.north];
+
+  // Start OSM fetch immediately — don't wait for the estimate pre-flight.
+  // The estimate makes its own Overpass count query (up to 30s); awaiting it
+  // before the real fetch would serialise two Overpass round-trips.
   tPost('osm_request_start', performance.now() - _t0, _area);
   const osmP = fetch(`/api/osm/features?${new URLSearchParams({
     west: String(bbox.west), south: String(bbox.south),
@@ -1235,6 +1251,16 @@ const abort = new AbortController();
       bbox, merch_type: merchType, coaster_shape: coasterShape,
     }).then((r: any) => { svgCurrentStl = r; onStlReady(); }).catch(() => { /* ignore */ });
   }).catch(() => { /* osmP already handles its own error */ });
+
+  // Estimate runs in background — updates status bar and refines progress bar when it resolves.
+  // Use local formula as initial estimate so runTransition can start immediately.
+  let estimatedMs = estimateGenMs(bbox) * 2; // rough: osm + svg
+  fetchEstimate(bbox, merchType).then(estimate => {
+    if (!estimate) return;
+    estimatedMs = (estimate.svg_estimate_ms ?? estimateGenMs(bbox)) + (estimate.osm_estimate_ms ?? estimateGenMs(bbox));
+    const label: Record<string, string> = { low: 'Simple area', medium: 'Medium density', high: 'Complex area', very_high: 'Very complex — may be slow' };
+    status.textContent = `${estimate.area_km2} km² · ${(estimate.element_count / 1000).toFixed(1)}k elements · ${label[estimate.complexity] ?? estimate.complexity}`;
+  }).catch(() => { /* non-critical */ });
 
   // Fly camera to fit the selection in view — runs in parallel with the OSM fetch.
   // Must complete before runTransition takes the Cesium canvas snapshot.
@@ -1340,6 +1366,25 @@ document.addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 // Save project
 // ---------------------------------------------------------------------------
+async function captureSvgThumbnail(size = 150): Promise<string | null> {
+  if (!svgCurrentUrl) return null;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = svgCurrentUrl;
+    });
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    const ctx = cv.getContext('2d')!;
+    const iw = img.naturalWidth || size, ih = img.naturalHeight || size;
+    const minDim = Math.min(iw, ih);
+    ctx.drawImage(img, (iw - minDim) / 2, (ih - minDim) / 2, minDim, minDim, 0, 0, size, size);
+    return cv.toDataURL('image/webp', 0.7);
+  } catch { return null; }
+}
+
 async function saveProject(): Promise<void> {
   const token = localStorage.getItem('hoas_token');
   if (!token) {
@@ -1347,41 +1392,33 @@ async function saveProject(): Promise<void> {
     return;
   }
   if (!confirmed) return;
-  const bbox      = rotSelAabb(confirmed);
-  const nameEl    = document.getElementById('designs-save-name')    as HTMLInputElement;
-  const statusEl  = document.getElementById('designs-save-status')  as HTMLElement;
-  const name      = nameEl.value.trim() || `${merchType} — ${new Date().toLocaleDateString('en-GB')}`;
+
+  const is3dOpen = document.getElementById('viewer-3d-view')!.style.display !== 'none';
+  const nameEl   = document.getElementById(is3dOpen ? 'stl-save-name' : 'svg-save-name') as HTMLInputElement;
+  const statusEl = document.getElementById(is3dOpen ? 'stl-save-status' : 'svg-save-status') as HTMLElement;
+  const name     = nameEl.value.trim() || `${merchType} — ${new Date().toLocaleDateString('en-GB')}`;
   statusEl.textContent = 'Saving…';
+
+  const bbox = rotSelAabb(confirmed);
+
+  let thumbnailDataUrl: string | null = null;
+  if (is3dOpen && _viewer3d) thumbnailDataUrl = _viewer3d.getSnapshot(150);
+  if (!thumbnailDataUrl) thumbnailDataUrl = await captureSvgThumbnail(150);
+
   try {
-    // Persist client-rendered blob to a stable server URL for dashboard thumbnails
-    let persistUrl: string | null = svgCurrentUrl || null;
-    if (svgCurrentText && svgCurrentUrl.startsWith('blob:')) {
-      const r = await fetch('/api/save-svg', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ svg_text: svgCurrentText }),
-      });
-      if (r.ok) persistUrl = (await r.json()).svg_url;
-    }
     const resp = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({
         name,
-        merch_type:        merchType,
-        bbox_west:         bbox.west,
-        bbox_south:        bbox.south,
-        bbox_east:         bbox.east,
-        bbox_north:        bbox.north,
-        style:             'osm_default',
-        coaster_shape:     coasterShape,
-        palette_overrides: svgOverrides(),
-        include_labels:    svgInclLabels,
-        include_buildings: svgInclBuildings,
-        svg_url:           persistUrl,
-        stl_buildings_url: svgCurrentStl?.stl_buildings_url || null,
-        stl_land_url:      svgCurrentStl?.stl_land_url      || null,
-        stl_water_url:     svgCurrentStl?.stl_water_url     || null,
+        merch_type:         merchType,
+        bbox_west:          bbox.west,
+        bbox_south:         bbox.south,
+        bbox_east:          bbox.east,
+        bbox_north:         bbox.north,
+        coaster_shape:      coasterShape,
+        palette_overrides:  svgOverrides(),
+        thumbnail_data_url: thumbnailDataUrl,
       }),
     });
     if (resp.status === 401) {
@@ -1397,37 +1434,32 @@ async function saveProject(): Promise<void> {
   }
 }
 
-document.getElementById('designs-btn-save')!.addEventListener('click', saveProject);
+document.getElementById('svg-save-btn')!.addEventListener('click', saveProject);
+document.getElementById('stl-save-btn')!.addEventListener('click', saveProject);
 
 // ---------------------------------------------------------------------------
 // User nav
 // ---------------------------------------------------------------------------
-function updateUserNav(): void {
-  const email  = localStorage.getItem('hoas_email');
-  const navEls = document.querySelectorAll<HTMLElement>('.user-nav-slot');
-  navEls.forEach(el => {
-    el.innerHTML = email ? '' : `<a href="/login.html" class="btn">⊞ Sign in</a>`;
-  });
-}
-updateUserNav();
-
-// Logout button lives in the designs panel
-document.getElementById('designs-logout')!.addEventListener('click', () => {
+function doLogout(): void {
   localStorage.removeItem('hoas_token');
   localStorage.removeItem('hoas_refresh');
   localStorage.removeItem('hoas_email');
   window.location.href = '/login.html';
-});
-
-// FAB: show whenever the user is logged in (it's the entry for save + designs + logout)
-function checkAuthFab(): void {
-  if (localStorage.getItem('hoas_token')) {
-    document.getElementById('designs-fab')!.style.display = '';
-  }
 }
-checkAuthFab();
 
-document.getElementById('designs-fab')!.addEventListener('click', openDesignsPanel);
+function updateUserNav(): void {
+  const email = localStorage.getItem('hoas_email') || '';
+  document.querySelectorAll<HTMLElement>('.user-nav-slot').forEach(el => {
+    el.innerHTML = email
+      ? `<div class="user-email-display">${email}</div>
+         <button class="btn nav-designs-btn">⊞ My Designs</button>
+         <button class="btn-secondary nav-logout-btn">↩ Logout</button>`
+      : `<a href="/login.html" class="btn">Sign in</a>`;
+    el.querySelector<HTMLElement>('.nav-designs-btn')?.addEventListener('click', openDesignsPanel);
+    el.querySelector<HTMLElement>('.nav-logout-btn')?.addEventListener('click', doLogout);
+  });
+}
+updateUserNav();
 
 // ---------------------------------------------------------------------------
 // STL ready — reveal save section for 3D designs
@@ -1435,8 +1467,16 @@ document.getElementById('designs-fab')!.addEventListener('click', openDesignsPan
 function onStlReady(): void {
   if (!['coaster','placemat','3d_print'].includes(merchType)) return;
   if (svgView.style.display === 'none') return;
-  document.getElementById('designs-save-section')!.style.display = '';
-  const statusEl = document.getElementById('designs-save-status')!;
+  document.getElementById('svg-save-section')!.style.display = '';
+  if (svgCurrentStl) {
+    const stlDiv = document.getElementById('stl-links-3d')!;
+    stlDiv.style.display = 'flex';
+    if (svgCurrentStl.stl_solid_url)     (document.getElementById('dl-solid-3d')     as HTMLAnchorElement).href = svgCurrentStl.stl_solid_url;
+    if (svgCurrentStl.stl_buildings_url) (document.getElementById('dl-buildings-3d') as HTMLAnchorElement).href = svgCurrentStl.stl_buildings_url;
+    if (svgCurrentStl.stl_land_url)      (document.getElementById('dl-land-3d')      as HTMLAnchorElement).href = svgCurrentStl.stl_land_url;
+    if (svgCurrentStl.stl_water_url)     (document.getElementById('dl-water-3d')     as HTMLAnchorElement).href = svgCurrentStl.stl_water_url;
+  }
+  const statusEl = document.getElementById('svg-save-status')!;
   statusEl.textContent = '3D model ready — save your design';
   setTimeout(() => { if (statusEl.textContent.startsWith('3D model')) statusEl.textContent = ''; }, 3500);
 }
@@ -1464,6 +1504,12 @@ function closeDesignsPanel(): void {
   designsBackdrop.classList.remove('open');
   designsPanel.classList.remove('open');
 }
+
+window.addEventListener('message', (e: MessageEvent) => {
+  if (!e.data) return;
+  if (e.data.type === 'open-designs') openDesignsPanel();
+  if (e.data.type === 'logout') doLogout();
+});
 
 async function renderDesigns(): Promise<void> {
   const token     = localStorage.getItem('hoas_token')!;
@@ -1498,8 +1544,8 @@ async function renderDesigns(): Promise<void> {
     contentEl.innerHTML = `<div class="designs-grid">${projects.map(p => {
       const date  = new Date(p.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
       const emoji = MERCH_EMOJI[p.merch_type] || '🗺';
-      const thumb = p.svg_url
-        ? `<img src="${p.svg_url}" alt="" loading="lazy">`
+      const thumb = p.thumbnail_data_url
+        ? `<img src="${p.thumbnail_data_url}" alt="" loading="lazy">`
         : `<span class="no-thumb">${emoji}</span>`;
       return `
         <div class="design-card">
@@ -1552,11 +1598,7 @@ function restorePalette(overrides: Record<string, string>): void {
 
 async function loadDesign(project: any): Promise<void> {
   closeDesignsPanel();
-
-  // Hide SVG view if open; clear overlay
-  svgView.style.display = 'none';
-  const ov = document.getElementById('transition-overlay') as HTMLCanvasElement;
-  ov.style.display = 'none'; ov.style.opacity = '1';
+  clearGeneratedState();
 
   // Restore merch type
   const newMerch = project.merch_type as string;
@@ -1565,11 +1607,11 @@ async function loadDesign(project: any): Promise<void> {
   merchType = newMerch;
 
   // Restore coaster shape
-  if (newMerch === 'coaster' && project.coaster_shape) {
+  if (project.coaster_shape) {
     const idx = COASTER_SHAPES.indexOf(project.coaster_shape as CoasterShape);
     if (idx !== -1) {
       coasterShapeIdx = idx; coasterShape = COASTER_SHAPES[idx];
-      document.getElementById('coaster-icon')!.textContent       = COASTER_ICONS[coasterShape];
+      document.getElementById('coaster-icon')!.textContent        = COASTER_ICONS[coasterShape];
       document.getElementById('coaster-shape-label')!.textContent = COASTER_LABELS[coasterShape];
     }
   }
@@ -1584,48 +1626,8 @@ async function loadDesign(project: any): Promise<void> {
   else if (editState === 'drawing') { clearHandlers(); editState = 'idle'; }
   enterEditing(sel);
 
-  // Fly camera to the area
-  await flyTobbox(bbox.west, bbox.south, bbox.east, bbox.north);
-
-  // Restore STL references
-  svgCurrentStl = project.stl_buildings_url
-    ? { stl_buildings_url: project.stl_buildings_url, stl_land_url: project.stl_land_url, stl_water_url: project.stl_water_url }
-    : null;
-
-  if (!project.svg_url) {
-    // No SVG — just leave the map with the selection restored
-    const panel = document.getElementById('panel')!;
-    panel.style.visibility = 'visible';
-    return;
-  }
-
-  // Fetch SVG text from the saved server URL so re-colour controls work
-  let svgText = '';
-  try {
-    const r = await fetch(project.svg_url);
-    svgText  = await r.text();
-  } catch { /* proceed — SVG view still works with empty text as image */ }
-
-  _cachedSvgResult = svgText ? { svg_url: project.svg_url, svgText } : null;
-  _cachedOsmData   = null; // cleared; background re-fetch below re-enables colour pickers
-
-  const panel = document.getElementById('panel')!;
-  panel.style.visibility = 'hidden';
-
-  genBtn.disabled = false;
-  (document.getElementById('btn-text') as HTMLElement).textContent = 'View Design →';
-  genBtn.onclick = _cachedSvgResult ? showCachedSvg : generate;
-
-  await openSvgView(project.svg_url, svgText, svgCurrentStl);
-
-  // Background OSM re-fetch to enable colour picker re-generation
-  const b = rotSelAabb(sel);
-  fetch(`/api/osm/features?${new URLSearchParams({
-    west: String(b.west), south: String(b.south), east: String(b.east), north: String(b.north),
-  })}`)
-    .then(r => r.json())
-    .then((data: { elements?: Record<string, unknown>[] }) => { _cachedOsmData = data; })
-    .catch(() => {});
+  // Re-generate from settings (no stored URLs needed)
+  generate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,39 +1640,3 @@ document.querySelectorAll<HTMLElement>('.merch-btn').forEach(el => el.addEventLi
 // Return-state restore — navigating back from 3d-viewer restores the SVG view
 // ---------------------------------------------------------------------------
 
-// If the page was restored from bfcache, JS state is already intact — discard
-// the sessionStorage item so it doesn't affect the next fresh load.
-window.addEventListener('pageshow', (e: PageTransitionEvent) => {
-  if (e.persisted) sessionStorage.removeItem('hoas_return_state');
-});
-
-(async () => {
-  const raw = sessionStorage.getItem('hoas_return_state');
-  if (!raw) return;
-  sessionStorage.removeItem('hoas_return_state');
-  try {
-    const s = JSON.parse(raw) as {
-      svgUrl: string;
-      bbox: { west: number; south: number; east: number; north: number };
-      merch: string; coasterShape: string;
-      stl: typeof svgCurrentStl;
-    };
-    // Restore merch type (variable + button UI, without clearing the cache)
-    merchType = s.merch;
-    document.querySelectorAll<HTMLElement>('.merch-btn').forEach(el =>
-      el.classList.toggle('active', el.dataset.type === s.merch));
-    // Reconstruct selection from bbox
-    confirmed = bboxToRotSel(s.bbox);
-    _live = { ...confirmed };
-    // Fetch SVG text so colour-picker can regenerate
-    let svgText = '';
-    try {
-      const r = await fetch(s.svgUrl);
-      if (r.ok) svgText = await r.text();
-    } catch { /* fall through — SVG image still loads via URL */ }
-    _cachedSvgResult = { svg_url: s.svgUrl, svgText };
-    // Open SVG view directly — no transition needed coming back from 3D
-    document.getElementById('panel')!.style.visibility = 'hidden';
-    await openSvgView(s.svgUrl, svgText, s.stl);
-  } catch { /* silent — fall through to normal load */ }
-})();

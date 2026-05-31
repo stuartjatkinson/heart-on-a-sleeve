@@ -62,12 +62,12 @@ class STLGenerationRequest(BaseModel):
     bbox: BBox
     merch_type: str = "3d_print"
     coaster_shape: str = "square"   # 'square' | 'circle' | 'hexagon'
-    # Layer heights (mm) — all tunable from the viewer
-    bldg_height: float = 4.0       # buildings + roads: 0 → bldg_height
-    water_start: float = 1.0       # water layer bottom
-    water_end:   float = 2.0       # water layer top  (sea level)
-    land_start:  float = 2.0       # land layer bottom
-    land_end:    float = 3.0       # land layer top
+    # Layer heights (mm) — equal thirds so assembled coaster is flat-topped
+    bldg_height: float = 4.0             # total height; buildings poke full height
+    water_start: float = 4.0 / 3        # ≈ 1.333 mm
+    water_end:   float = 4.0 * 2 / 3   # ≈ 2.667 mm
+    land_start:  float = 4.0 * 2 / 3   # ≈ 2.667 mm (= water_end, flat-top)
+    land_end:    float = 4.0            # = bldg_height
     # Geometry processing
     gap_close_mm:    float = 0.8   # merge buildings with gap < this
     water_expand_mm: float = 0.5   # expand water bodies by this amount

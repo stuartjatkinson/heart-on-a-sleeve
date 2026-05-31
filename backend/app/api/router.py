@@ -52,6 +52,23 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.error("create_all FAILED: %s", exc, exc_info=True)
         raise
+    # Add columns introduced after initial schema without a full migration tool
+    from sqlalchemy import text as _text
+    _migrations = [
+        ("thumbnail_data_url", "ALTER TABLE design_projects ADD COLUMN thumbnail_data_url TEXT"),
+    ]
+    driver = str(engine.url.drivername)
+    async with engine.begin() as conn:
+        for col, sql in _migrations:
+            try:
+                if 'postgresql' in driver:
+                    await conn.execute(_text(
+                        f"ALTER TABLE design_projects ADD COLUMN IF NOT EXISTS {col} TEXT"
+                    ))
+                else:
+                    await conn.execute(_text(sql))
+            except Exception:
+                pass  # column already exists
     yield
 
 
@@ -105,7 +122,7 @@ async def get_osm_features(west: float, south: float, east: float, north: float)
     bbox = BBox(west=west, south=south, east=east, north=north)
     t0 = _t.perf_counter()
     try:
-        data = await osm_fetcher.fetch_area(bbox)
+        data = await osm_fetcher.fetch_area(bbox, force_buildings=True)
         timing_utils.tlog("osm_features_total", (_t.perf_counter() - t0) * 1000,
                           f"elements={len(data.get('elements', []))}")
         return data
@@ -173,7 +190,7 @@ async def save_svg(payload: dict):
 async def generate_stl(req: STLGenerationRequest):
     global _current_bbox
     try:
-        osm_data = await osm_fetcher.fetch_area(req.bbox)
+        osm_data = await osm_fetcher.fetch_area(req.bbox, force_buildings=True)
     except OverpassError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

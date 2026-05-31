@@ -87,7 +87,7 @@ STYLES: dict[str, dict] = {
         'show_minor_roads': True,
         'show_paths':       False,
         'show_buildings':   True,
-        'show_labels':      True,
+        'show_labels':      False,
         'show_railways':    False,
     },
     'minimalist': {
@@ -127,7 +127,7 @@ STYLES: dict[str, dict] = {
         'show_minor_roads': True,
         'show_paths':       False,
         'show_buildings':   True,
-        'show_labels':      True,
+        'show_labels':      False,
         'show_railways':    True,
     },
 }

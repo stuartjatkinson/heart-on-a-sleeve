@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Float, Boolean, JSON, ForeignKey, Integer, func
+from sqlalchemy import String, Float, Boolean, JSON, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -31,10 +31,7 @@ class DesignProject(Base):
     palette_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     include_labels: Mapped[bool] = mapped_column(Boolean, server_default="true")
     include_buildings: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    svg_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    stl_buildings_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    stl_land_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    stl_water_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_data_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 

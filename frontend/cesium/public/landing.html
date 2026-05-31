@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heart on a Sleeve</title>
+  <link rel="stylesheet" href="/app.css">
+  <style>
+    html, body {
+      width: 100%; height: 100%; margin: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-page); overflow: hidden;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 48px 28px;
+      max-width: 460px;
+      animation: fadeUp 0.4s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero-icon { font-size: 44px; display: block; margin-bottom: 20px; }
+
+    h1 {
+      font-size: 30px; font-weight: 700;
+      color: var(--text-primary); letter-spacing: 0.01em;
+      margin: 0 0 8px;
+    }
+
+    .tagline {
+      font-size: 14px; color: var(--text-mid);
+      line-height: 1.7; margin: 0 0 32px;
+    }
+
+    .features {
+      list-style: none; padding: 0; margin: 0 0 36px;
+      display: inline-block; text-align: left;
+    }
+    .features li {
+      font-size: 13px; color: var(--text-dim);
+      padding: 4px 0; display: flex; align-items: center; gap: 8px;
+    }
+    .features li::before { content: '◦'; color: var(--accent); font-size: 16px; line-height: 1; }
+
+    .actions { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
+    .btn-cta {
+      display: inline-block; padding: 13px 40px;
+      background: var(--accent); color: #fff; border: none;
+      border-radius: var(--radius-btn);
+      font-size: 15px; font-weight: 600; font-family: inherit;
+      cursor: pointer; text-decoration: none;
+      transition: opacity 0.12s; min-width: 200px; text-align: center;
+    }
+    .btn-cta:hover { opacity: 0.87; }
+
+    .auth-row {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 12px; color: var(--text-muted);
+    }
+
+    .link {
+      font-size: 12px; color: var(--text-dim);
+      text-decoration: none; transition: color 0.12s; cursor: pointer;
+    }
+    .link:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="hero">
+  <span class="hero-icon">❤️</span>
+  <h1>Heart on a Sleeve</h1>
+  <p class="tagline">Turn any place on Earth into a custom product — T-shirts, mugs, coasters, 3D-printed maps and more.</p>
+
+  <ul class="features">
+    <li>Draw any area on a live globe</li>
+    <li>Instantly generate a unique SVG map design</li>
+    <li>Preview in 3D or export for printing</li>
+  </ul>
+
+  <div class="actions">
+    <a href="/index.html" class="btn-cta">Start Creating</a>
+    <div class="auth-row" id="auth-row"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var token = localStorage.getItem('hoas_token');
+  var email = localStorage.getItem('hoas_email');
+  var row   = document.getElementById('auth-row');
+
+  if (token) {
+    var expired = false;
+    try {
+      var payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      if (payload.exp && payload.exp * 1000 < Date.now()) expired = true;
+    } catch (e) { expired = true; }
+
+    if (expired) {
+      localStorage.removeItem('hoas_token');
+      localStorage.removeItem('hoas_refresh');
+      localStorage.removeItem('hoas_email');
+    } else {
+      row.innerHTML =
+        '<span>' + (email || '') + '</span>' +
+        '<a href="#" class="link" id="logout-lnk">Sign out</a>';
+      document.getElementById('logout-lnk').addEventListener('click', function (e) {
+        e.preventDefault();
+        localStorage.removeItem('hoas_token');
+        localStorage.removeItem('hoas_refresh');
+        localStorage.removeItem('hoas_email');
+        row.innerHTML = '';
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>

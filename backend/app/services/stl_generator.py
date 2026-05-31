@@ -8,8 +8,9 @@ Three separate printable pieces that assemble into a complete map model:
       Simplified polygons, small gaps closed, minimum 1 mm height.
 
   water.stl (blue)
-      All water bodies + buffered waterways, Z=0 → WATER_H.
-      Building/road shapes punched out so the grey pillars slot through.
+      Full plate footprint (Z=WATER_START → WATER_END) with building/road
+      shapes punched through as holes — the background base disc.
+      Land areas are covered by the land lid; open areas remain as water.
 
   land.stl (green) — the locking lid
       Everything that isn't buildings, roads, or water.
@@ -55,13 +56,17 @@ WATERWAY_WIDTH_MM: dict[str, float] = {
 }
 
 # Default height constants (mm) — all overridable via STLGenerationRequest
-BLDG_H_DEFAULT   = 4.0   # buildings + roads: 0 → BLDG_H
-WATER_START_DEF  = 1.0   # water layer bottom
-WATER_END_DEF    = 2.0   # water layer top (sea level)
-LAND_START_DEF   = 2.0   # land layer bottom
-LAND_END_DEF     = 3.0   # land layer top
+# Three equal layers so the assembled coaster is flat-topped:
+#   0..1/3  → buildings + roads + collar frame
+#   1/3..2/3 → water plate (inside collar)
+#   2/3..1  → land lid (inside collar, flush with building tops)
+BLDG_H_DEFAULT   = 4.0
+WATER_START_DEF  = BLDG_H_DEFAULT / 3       # ≈ 1.333 mm
+WATER_END_DEF    = BLDG_H_DEFAULT * 2 / 3   # ≈ 2.667 mm
+LAND_START_DEF   = BLDG_H_DEFAULT * 2 / 3   # ≈ 2.667 mm
+LAND_END_DEF     = BLDG_H_DEFAULT            # = 4.0 mm (flush with buildings)
 MIN_BLDG_H       = 1.0   # minimum building height
-GAP_CLOSE_MM     = 0.8   # gaps smaller than this between buildings are merged
+GAP_CLOSE_MM     = 0.8   # kept for API compat; gap-close processing removed
 WATER_EXPAND     = 0.5   # how much water expands beyond its OSM boundary
 
 
@@ -173,47 +178,45 @@ class STLGenerator:
                 if poly:
                     raw_water.append(poly)
 
-        # ── 2. Simplify & merge buildings ──────────────────────────────────────
+        # ── 2. Collect buildings as-is ────────────────────────────────────────
         bldg_polys, bldg_heights = [], []
         for poly, h in raw_bldgs:
-            s = make_valid(poly.simplify(0.4, preserve_topology=True))
-            for p in _geom_parts(s):
+            for p in _geom_parts(make_valid(poly)):
                 if p.area > 0.1:
                     bldg_polys.append(p)
                     bldg_heights.append(max(h, min_bldg))
 
-        if bldg_polys:
-            half = gap_close / 2
-            merged = make_valid(unary_union([p.buffer(half, join_style=2) for p in bldg_polys]))
-            merged = make_valid(merged.buffer(-half * 0.85, join_style=2))
-            bldg_union = merged
-        else:
-            bldg_union = Polygon()
+        bldg_union = make_valid(unary_union(bldg_polys)) if bldg_polys else Polygon()
 
         road_union  = make_valid(unary_union(raw_roads)) if raw_roads else Polygon()
         water_union = make_valid(unary_union(raw_water)) if raw_water else Polygon()
         urban_union = make_valid(bldg_union.union(road_union)) if not road_union.is_empty else bldg_union
 
-        # ── 3. Build three pieces ──────────────────────────────────────────────
+        # ── 3. Build four pieces ──────────────────────────────────────────────
         plate_shape, outer_shape = _plate_shapes(plate_w, plate_h, collar, coaster_shape)
 
+        bldg_meshes  = self._buildings_piece(
+            bldg_polys, bldg_heights, raw_roads,
+            bldg_union, road_union, urban_union,
+            plate_shape, outer_shape, bldg_h, topology,
+            base_h=water_start,
+        )
+        water_meshes = self._water_piece(
+            water_union, urban_union, plate_shape, water_start, water_end,
+        )
+        land_meshes  = self._land_piece(
+            urban_union, water_union, plate_shape, outer_shape,
+            land_start, land_end, topology, elev_grid,
+        )
         return {
-            'buildings': _export(self._buildings_piece(
-                bldg_polys, bldg_heights, raw_roads,
-                bldg_union, road_union, urban_union,
-                plate_shape, outer_shape, bldg_h, topology
-            )),
-            'water': _export(self._water_piece(
-                water_union, urban_union, plate_shape, water_start, water_end
-            )),
-            'land': _export(self._land_piece(
-                urban_union, water_union, plate_shape, outer_shape,
-                land_start, land_end, topology, elev_grid
-            )),
+            'buildings': _export(bldg_meshes),
+            'water':     _export(water_meshes),
+            'land':      _export(land_meshes),
+            'solid':     _export(bldg_meshes + water_meshes + land_meshes),
         }
 
     # ── Buildings piece ────────────────────────────────────────────────────────
-    # Flat mode: extrudes the MERGED urban union (terraced rows → single cuboid).
+    # Flat mode: individual building polygons + roads, each at bldg_h.
     # Topology mode: individual buildings at proportional heights.
     # Both modes: outer collar ring = frame walls at bldg_h so water + lid sit inside.
 
@@ -221,6 +224,7 @@ class STLGenerator:
         self, bldg_polys, bldg_heights, raw_roads,
         bldg_union, road_union, urban_union,
         plate_shape, outer_shape, bldg_h, topology,
+        base_h: float = 0.0,
     ) -> list[trimesh.Trimesh]:
         meshes = []
         # Outer collar walls — frame that water and lid sit inside
@@ -228,6 +232,11 @@ class STLGenerator:
         m = _extrude(collar_ring, bldg_h)
         if m:
             meshes.append(m)
+        # Solid base plate — joins all pillars and provides the floor for water/land
+        if base_h > 0:
+            m = _extrude(plate_shape, base_h)
+            if m:
+                meshes.append(m)
 
         if topology:
             for poly, h in zip(bldg_polys, bldg_heights):
@@ -241,26 +250,33 @@ class STLGenerator:
                     if m:
                         meshes.append(m)
         else:
-            # Flat mode: clip to plate boundary first, then extrude merged union
-            urban_clipped = make_valid(urban_union.intersection(plate_shape))
-            for p in _geom_parts(urban_clipped):
-                m = _extrude(p, bldg_h)
-                if m:
-                    meshes.append(m)
+            # Flat mode: buildings/roads span only through water+land (upper 2/3rds).
+            # The base plate (0→base_h) is a clean flat slab; extrusions start above it.
+            bldg_span = max(bldg_h - base_h, 0.5)
+            for poly, h in zip(bldg_polys, bldg_heights):
+                for p in _geom_parts(make_valid(poly.intersection(plate_shape))):
+                    m = _extrude(p, bldg_span, z_base=base_h)
+                    if m:
+                        meshes.append(m)
+            for poly in raw_roads:
+                for p in _geom_parts(make_valid(poly.intersection(plate_shape))):
+                    m = _extrude(p, bldg_span, z_base=base_h)
+                    if m:
+                        meshes.append(m)
 
         return meshes
 
     # ── Water piece ────────────────────────────────────────────────────────────
-    # Thin layer within the plate bounds (inside the collar walls).
-    # Buildings and roads punch through it as holes.
+    # Full plate footprint with building/road holes — the background base disc.
+    # Land lid sits on top in non-water areas; water bodies remain uncovered.
 
     def _water_piece(
         self, water_union, urban_union,
         plate_shape, water_start, water_end,
     ) -> list[trimesh.Trimesh]:
-        if water_union.is_empty:
-            return []
-        water = make_valid(water_union.intersection(plate_shape))
+        # 0.1 mm inset so water sits flush against the collar inner wall
+        inner_plate = plate_shape.buffer(-0.1)
+        water = inner_plate if not inner_plate.is_empty else plate_shape
         if not urban_union.is_empty:
             water = make_valid(water.difference(urban_union))
         thickness = max(water_end - water_start, 0.5)
@@ -271,10 +287,9 @@ class STLGenerator:
                 meshes.append(m)
         return meshes
 
-    # ── Land piece (locking lid) ───────────────────────────────────────────────
-    # Same outer footprint as the collar (plate + collar_mm on all sides).
-    # Inner area has holes for building protrusions.
-    # The collar portion of the lid is always solid — creates the outer frame.
+    # ── Land piece (top lid) ──────────────────────────────────────────────────
+    # Fits inside the collar (buildings layer handles the frame).
+    # Holes for buildings/roads (they protrude through) and water bodies (recessed).
 
     def _land_piece(
         self, urban_union, water_union,
@@ -282,18 +297,13 @@ class STLGenerator:
         land_start, land_end,
         topology, elev_grid,
     ) -> list[trimesh.Trimesh]:
-        # Collar ring — always solid, creates the outer frame of the lid
-        collar_ring = make_valid(outer_shape.difference(plate_shape))
-
-        # Inner land — plate area minus buildings/roads (and water if present)
-        inner = plate_shape
+        # 0.1 mm inset — land sits flush against the collar inner wall
+        inner_plate = plate_shape.buffer(-0.1)
+        lid_shape = inner_plate if not inner_plate.is_empty else plate_shape
         if not urban_union.is_empty:
-            inner = make_valid(inner.difference(urban_union))
+            lid_shape = make_valid(lid_shape.difference(urban_union))
         if not water_union.is_empty:
-            inner = make_valid(inner.difference(water_union.intersection(plate_shape)))
-
-        # Combine inner land + collar ring = full lid shape
-        lid_shape = make_valid(inner.union(collar_ring))
+            lid_shape = make_valid(lid_shape.difference(water_union.intersection(plate_shape)))
 
         thickness = max(land_end - land_start, 0.5)
 
@@ -368,6 +378,7 @@ def _geom_parts(geom) -> list[Polygon]:
         return [geom]
     return []
 
+
 def _extrude(poly: Polygon, height: float, z_base: float = 0.0) -> trimesh.Trimesh | None:
     if height <= 0.01 or poly.is_empty or poly.area < 0.05:
         return None
@@ -383,8 +394,6 @@ def _export(meshes: list) -> BytesIO:
     meshes = [m for m in meshes if m is not None]
     if not meshes:
         mesh = trimesh.creation.box([10, 10, 1])
-    elif len(meshes) == 1:
-        mesh = meshes[0]
     else:
         try:
             mesh = trimesh.util.concatenate(meshes)

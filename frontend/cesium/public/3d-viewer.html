@@ -17,8 +17,6 @@
     canvas { display: block; }
     #stats  { font-size: 10px; color: var(--text-muted); line-height: 1.9; margin-bottom: 4px; }
     #status { font-size: 11px; color: var(--text-mid);   min-height: 16px; margin-bottom: 6px; }
-    #regen-status { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: center; }
-
     /* Loading bar — bottom of canvas area */
     #loading {
       position: absolute; bottom: 0; left: 0; right: 0;
@@ -30,11 +28,13 @@
     #load-bar-wrap { flex: 1; height: 3px; border-radius: 2px; width: auto; }
     #load-bar  { background: linear-gradient(90deg,#4a9eff,#88c4ff); transition: none; }
     /* SVG cover — starts at the source SVG viewport rect (set by inline script),
-       then animates to the 3D plate position once OSM meshes are built. */
+       then animates to the 3D plate position once OSM meshes are built.
+       Must live OUTSIDE #canvas-wrap and use will-change so it gets its own
+       GPU compositing layer above the WebGL canvas (which ignores CSS z-index). */
     #svg-cover {
       position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
       object-fit: contain; background: transparent;
-      z-index: 8;
+      z-index: 9999; will-change: transform;
     }
 
     @media (max-width: 900px) {
@@ -67,79 +67,14 @@
 <body>
 <div id="panel3d" class="panel">
   <div class="sheet-handle" id="panel3d-handle"></div>
-  <button class="btn" onclick="history.back()" style="margin-bottom:8px">← SVG View</button>
+  <button class="btn" onclick="window.parent!==window?window.parent.postMessage({type:'close-3d'},'*'):history.back()" style="margin-bottom:8px">← SVG View</button>
   <h2>3D Map Preview</h2>
   <div id="status">Loading…</div>
   <div id="stats"></div>
 
-  <button class="btn" id="btn-mode" style="display:none">🖨 Print Preview</button>
+  <button class="btn" id="btn-mode" style="display:none">🖨 3D Print →</button>
   <button class="btn" id="btn-wire">⬡ Wireframe</button>
   <button class="btn" id="btn-rotate">▶ Auto-rotate</button>
-
-  <div id="stl-links" style="display:none">
-    <div class="divider"></div>
-    <div class="dl-label">Download print files (3 colours):</div>
-    <a class="btn" id="dl-buildings" download="buildings.stl">↓ Buildings (grey)</a>
-    <a class="btn" id="dl-land"      download="land.stl">↓ Land (green)</a>
-    <a class="btn" id="dl-water"     download="water.stl">↓ Water (blue)</a>
-  </div>
-
-  <div id="params-panel" style="display:none">
-    <div class="divider"></div>
-
-    <details open>
-      <summary style="cursor:pointer;font-size:11px;color:var(--text-label);letter-spacing:.06em;text-transform:uppercase;padding:4px 0;list-style:none">▸ Layer heights (mm)</summary>
-      <div class="param-row" style="margin-top:5px">
-        <label>Buildings</label>
-        <input type="number" id="p-bldg-h" value="4" step="0.5" min="1" max="20">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">How tall building &amp; road extrusions rise from the base plate (0 → this value).</div>
-      <div class="param-row">
-        <label>Water</label>
-        <input type="number" id="p-water-s" value="1" step="0.5" min="0" max="10">→<input type="number" id="p-water-e" value="2" step="0.5" min="0" max="10">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Z-range of the blue water disc. Should sit above roads (≥0) and below land lid.</div>
-      <div class="param-row">
-        <label>Land lid</label>
-        <input type="number" id="p-land-s" value="2" step="0.5" min="0" max="10">→<input type="number" id="p-land-e" value="3" step="0.5" min="0" max="10">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Z-range of the green top lid. Building holes let protrusions pierce through and clamp the stack.</div>
-    </details>
-
-    <details style="margin-top:6px">
-      <summary style="cursor:pointer;font-size:11px;color:var(--text-label);letter-spacing:.06em;text-transform:uppercase;padding:4px 0;list-style:none">▸ Processing</summary>
-      <div class="param-row" style="margin-top:5px">
-        <label>Gap close</label>
-        <input type="number" id="p-gap" value="0.8" step="0.1" min="0" max="5">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Merges buildings closer than this into single blocks — cleans up terraced rows so they print as one solid piece.</div>
-      <div class="param-row">
-        <label>Water expand</label>
-        <input type="number" id="p-wexp" value="0.5" step="0.1" min="0" max="3">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Widens all waterways by this amount so thin rivers/canals are above the minimum printable line width.</div>
-      <div class="param-row">
-        <label>Min bldg h</label>
-        <input type="number" id="p-minb" value="1" step="0.5" min="0.5" max="5">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Floor height for any building so nothing extrudes below the printable threshold.</div>
-      <div class="param-row">
-        <label>Collar width</label>
-        <input type="number" id="p-col" value="1" step="0.5" min="0" max="5">
-        <span>mm</span>
-      </div>
-      <div class="param-desc">Width of the outer frame walls on the grey base and green lid that hold the three pieces together.</div>
-    </details>
-
-    <button class="btn" id="btn-regen" style="margin-top:8px;border-color:#4a9eff;color:#4a9eff">⟳ Regenerate STL</button>
-    <div id="regen-status" style="font-size:10px;color:#555;margin-top:4px;text-align:center"></div>
-  </div>
 
   <div class="hint">
     Left drag — orbit<br>
@@ -147,30 +82,35 @@
     Middle drag — pan<br>
     Scroll — zoom
   </div>
+  <div class="divider"></div>
+  <div id="user-email-3d" style="font-size:11px;color:var(--text-dim);padding:4px 0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+  <button class="btn" id="btn-my-designs-3d">⊞ My Designs</button>
+  <button class="btn-secondary" id="btn-logout-3d" style="margin-top:4px;color:#e06060;border-color:var(--border-dim)">↩ Logout</button>
 </div>
 <div id="canvas-wrap">
-  <img id="svg-cover" alt="">
-  <script>
-  // Runs synchronously before first paint — positions cover at source SVG rect
-  // for a seamless page-to-page transition (no flash).
-  (function() {
-    var e = null;
-    try { e = JSON.parse(sessionStorage.getItem('hoas_svg_entry') || 'null'); } catch(err) {}
-    sessionStorage.removeItem('hoas_svg_entry');
-    var c = document.getElementById('svg-cover');
-    if (c && e) {
-      c.style.left = e.x + 'px'; c.style.top = e.y + 'px';
-      c.style.width = e.w + 'px'; c.style.height = e.h + 'px';
-    }
-    // Stash for the later animation step
-    window._svgEntry = e;
-  })();
-  </script>
   <div id="loading">
     <div id="load-msg">Initialising…</div>
     <div id="load-bar-wrap"><div id="load-bar"></div></div>
   </div>
 </div>
+<!-- svg-cover is a direct body child so it gets its own compositing layer
+     above the WebGL canvas, which ignores CSS z-index when GPU-composited. -->
+<img id="svg-cover" alt="" style="opacity:0">
+<script>
+// Runs synchronously — positions cover at source SVG rect before first paint.
+(function() {
+  var e = null;
+  try { e = JSON.parse(localStorage.getItem('hoas_svg_entry') || 'null'); } catch(err) {}
+  localStorage.removeItem('hoas_svg_entry');
+  var c = document.getElementById('svg-cover');
+  if (c && e) {
+    c.style.left = e.x + 'px'; c.style.top = e.y + 'px';
+    c.style.width = e.w + 'px'; c.style.height = e.h + 'px';
+    c.style.opacity = '1';
+  }
+  window._svgEntry = e;
+})();
+</script>
 
 <script type="importmap">
 { "imports": {
@@ -189,11 +129,16 @@ const west  = parseFloat(p.get('west')  ?? '-0.13');
 const south = parseFloat(p.get('south') ?? '51.50');
 const east  = parseFloat(p.get('east')  ?? '-0.11');
 const north = parseFloat(p.get('north') ?? '51.52');
-const merch = p.get('merch') ?? '3d_print';
+const merch        = p.get('merch') ?? '3d_print';
+const coasterShape = p.get('coaster_shape') ?? 'square';
 let stlBuildings = p.get('stl_buildings');
 let stlLand      = p.get('stl_land');
 let stlWater     = p.get('stl_water');
 const svgUrl     = p.get('svg');
+
+let paletteOverrides = null;
+try { paletteOverrides = JSON.parse(localStorage.getItem('hoas_palette_overrides') || 'null'); } catch {}
+localStorage.removeItem('hoas_palette_overrides');
 const hasPrintParts = !!(stlBuildings && stlLand && stlWater);
 
 // Show SVG cover immediately — persists until OSM data arrives
@@ -216,7 +161,7 @@ function proj(lon, lat) {
 // ── Renderer ──────────────────────────────────────────────────────────────────
 const canvasWrap = document.getElementById('canvas-wrap');
 const CVPW = canvasWrap.clientWidth || (innerWidth - 272);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(CVPW, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -305,7 +250,7 @@ const matBldgMid = makeMat('std', 'bldgMid', 'bldgMid', { roughness:0.7, metalne
 const matBldgHi  = makeMat('std', 'bldgHi',  'bldgHi',  { roughness:0.6, metalness:0.12 });
 
 const osmMats = [matGround, matRoad, matRoadMn, matWater, matPark, matBldgLo, matBldgMid, matBldgHi];
-const allMats = [...osmMats]; // print part mats added later
+const allMats = [...osmMats];
 
 // ── Ground — exactly the bbox footprint ──────────────────────────────────────
 const ground = new THREE.Mesh(
@@ -488,19 +433,9 @@ let entryReady = false; // set true once meshes are built
   renderer.render(scene, camera);
 })();
 
-// ── SVG ground texture — start loading immediately, fade in over 2.2 s ───────
-if (svgUrl) {
-  applyGroundTexture().then(() => {
-    const t0 = performance.now();
-    const FADE_MS = 2200;
-    (function fadeGnd(now) {
-      const ease = Math.min(1, (now - t0) / FADE_MS);
-      matGround.color.setRGB(ease, ease, ease);
-      matGround.needsUpdate = true;
-      if (ease < 1) requestAnimationFrame(fadeGnd);
-    })(performance.now());
-  });
-}
+// ── SVG ground texture — load immediately, reveal only after fold animation ───
+// Storing the promise lets the fold callback trigger the fade without a race.
+const groundTexPromise = svgUrl ? applyGroundTexture() : Promise.resolve();
 
 // ── Pre-load fake-asymptotic progress bar (0 → 50 %) ─────────────────────────
 const cosLatEst  = Math.cos(cy * Math.PI / 180);
@@ -517,7 +452,7 @@ const fetchStart = performance.now();
 // ── OSM data — use sessionStorage cache from SVG page if bbox matches ─────────
 let osmData;
 let _usedCache = false;
-const _cachedStr = sessionStorage.getItem('hoas_osm_cache');
+const _cachedStr = localStorage.getItem('hoas_osm_cache');
 if (_cachedStr) {
   try {
     const c = JSON.parse(_cachedStr);
@@ -527,7 +462,7 @@ if (_cachedStr) {
       osmData = c.data; _usedCache = true; minPreload = 800;
     }
   } catch { /* corrupt cache — fall through to network */ }
-  sessionStorage.removeItem('hoas_osm_cache');
+  localStorage.removeItem('hoas_osm_cache');
 }
 
 if (!_usedCache) {
@@ -643,210 +578,75 @@ statsEl.textContent = `${nBuildings} buildings`;
 setLoad('Building scene…');
 entryReady = true; // hand off to tickEntry — bar takes over at 50 %
 
-// SVG cover: translate in 3D space from its source position onto the ground plate.
-if (svgCover) {
-  // Project ground plate corners to viewport (fixed) coords.
-  const cr  = canvasWrap.getBoundingClientRect();
-  const hw  = sceneW / 2, hd = sceneD / 2;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [pcx, pcz] of [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]]) {
-    const n  = new THREE.Vector3(pcx, 0, pcz).project(camera);
-    const sx = (n.x + 1) / 2 * cr.width  + cr.left;
-    const sy = (-n.y + 1) / 2 * cr.height + cr.top;
-    if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
-    if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
-  }
-  // Target rect (plate in screen space)
-  const tx = minX, ty = minY, tw = maxX - minX, th = maxY - minY;
-
-  // Source rect — where the SVG was in the 2D viewer (stored before navigation)
-  const src = window._svgEntry || { x: cr.left, y: cr.top, w: cr.width, h: cr.height };
-
-  const t0cover = performance.now(), SHRINK_MS = 750;
-  (function shrink(now) {
-    const prog = Math.min(1, (now - t0cover) / SHRINK_MS);
-    const ease = 1 - Math.pow(1 - prog, 3); // cubic ease-out
-
-    svgCover.style.left   = (src.x + (tx - src.x) * ease) + 'px';
-    svgCover.style.top    = (src.y + (ty - src.y) * ease) + 'px';
-    svgCover.style.width  = (src.w + (tw - src.w) * ease) + 'px';
-    svgCover.style.height = (src.h + (th - src.h) * ease) + 'px';
-
-    // Tilt the SVG as it "lands" on the horizontal plane
-    const tilt = ease * 28;
-    svgCover.style.transform       = `perspective(1400px) rotateX(${tilt}deg)`;
-    svgCover.style.transformOrigin = '50% 100%';
-
-    if (prog < 1) { requestAnimationFrame(shrink); return; }
-
-    svgCover.style.transform = '';
-    svgCover.style.transition = 'opacity 0.4s ease';
+// THREE.js fold-in animation — quick-fade the CSS cover then fold an SVG plane
+// from vertical (upright at the south/front edge) down to lie flat on the ground.
+// Pivot is at world (0, 0, sceneD/2); rotation.x goes from 0 → -PI/2.
+if (svgUrl) {
+  if (svgCover) {
+    svgCover.style.transition = 'opacity 0.25s ease';
     svgCover.style.opacity = '0';
-    setTimeout(() => { if (svgCover && svgCover.parentNode) svgCover.remove(); }, 450);
-  })(performance.now());
+    setTimeout(function() { if (svgCover && svgCover.parentNode) svgCover.remove(); }, 300);
+  }
+  new THREE.TextureLoader().load(svgUrl, function(fTex) {
+    fTex.colorSpace = THREE.SRGBColorSpace;
+    const fMat = new THREE.MeshBasicMaterial({
+      map: fTex, side: THREE.DoubleSide,
+      transparent: true, opacity: 1.0,
+      depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    });
+    const fMesh = new THREE.Mesh(new THREE.PlaneGeometry(sceneW, sceneD), fMat);
+    // Offset plane center so its bottom edge sits at the group pivot point
+    fMesh.position.set(0, sceneD / 2, 0);
+    const fGroup = new THREE.Group();
+    fGroup.position.set(0, 0, sceneD / 2); // pivot at south/front edge of ground
+    fGroup.add(fMesh);
+    scene.add(fGroup);
+
+    const FOLD_MS = 600;
+    const t0fold = performance.now();
+    (function animFold(now) {
+      const prog = Math.min(1, (now - t0fold) / FOLD_MS);
+      const ease = 1 - Math.pow(1 - prog, 3);
+      fGroup.rotation.x = -Math.PI / 2 * ease;
+      if (prog < 1) { requestAnimationFrame(animFold); return; }
+      // Fold complete — fade out over 400ms
+      const t0fade = performance.now();
+      (function animFade(now2) {
+        const fp = Math.min(1, (now2 - t0fade) / 400);
+        fMat.opacity = 1 - fp;
+        if (fp < 1) { requestAnimationFrame(animFade); return; }
+        scene.remove(fGroup);
+        fMat.dispose();
+        fMesh.geometry.dispose();
+        // Fold done — fade in SVG ground texture over 600 ms
+        groundTexPromise.then(() => {
+          if (!matGround.map) return;
+          const t0gnd = performance.now();
+          (function fadeGnd(now3) {
+            const ease = Math.min(1, (now3 - t0gnd) / 600);
+            matGround.color.setRGB(ease, ease, ease);
+            matGround.needsUpdate = true;
+            if (ease < 1) requestAnimationFrame(fadeGnd);
+          })(performance.now());
+        });
+      })(performance.now());
+    })(performance.now());
+  });
 }
 
-// ── Print Preview — load the 3 STL pieces ────────────────────────────────────
-const printGroup  = new THREE.Group();
-printGroup.visible = false;
-scene.add(printGroup);
-
-// Sub-groups for layered animation (buildings / water / land lid)
-const printLayers = {
-  buildings: new THREE.Group(),
-  water:     new THREE.Group(),
-  land:      new THREE.Group(),
-};
-Object.values(printLayers).forEach(g => { g.visible = false; printGroup.add(g); });
-// Separate group for the baseplate — shown immediately, never wireframed
-const baseplateGroup = new THREE.Group();
-baseplateGroup.visible = false;
-printGroup.add(baseplateGroup);
-const printLayerMats = { buildings: null, water: null, land: null };
-let _watRestLocalY = 0, _lndRestLocalY = 0; // stacking rest positions, set in loadPrintParts
-
-// ── Fabric Preview — SVG texture + buildings ──────────────────────────────────
+// ── Fabric Preview — SVG texture + buildings (non-3D merch only) ─────────────
 const fabricGroup = new THREE.Group();
 fabricGroup.visible = false;
 scene.add(fabricGroup);
 
-// Print material colors — same three-color scheme as the physical print
-const PRINT_MAT = {
-  buildings: { solid: 0x909088, wire: WIRE.bldgLo  },
-  land:      { solid: 0x4a8a4a, wire: WIRE.park     },
-  water:     { solid: 0x2a6aaa, wire: WIRE.water    },
-};
-
 const btnMode = document.getElementById('btn-mode');
 if (is3dPrint && hasPrintParts) {
   btnMode.style.display = 'block';
-  btnMode.textContent = '🖨 Print Preview';
-  document.getElementById('stl-links').style.display = 'block';
-  document.getElementById('dl-buildings').href = stlBuildings;
-  document.getElementById('dl-land').href      = stlLand;
-  document.getElementById('dl-water').href     = stlWater;
+  btnMode.textContent = '🖨 3D Print →';
 } else if (!is3dPrint && svgUrl) {
   btnMode.style.display = 'block';
   btnMode.textContent = '🖼 Fabric Preview';
-}
-
-let printLoaded = false;
-
-async function loadPrintParts() {
-  if (printLoaded) return;
-  setStatus('Loading print model…');
-
-  const loader = new STLLoader();
-  const defs = [
-    { url: stlBuildings, key: 'buildings' },
-    { url: stlLand,      key: 'land'      },
-    { url: stlWater,     key: 'water'     },
-  ];
-
-  for (const { url, key } of defs) {
-    try {
-      const geo = await new Promise((res, rej) => loader.load(url, res, undefined, rej));
-      geo.rotateX(-Math.PI / 2);
-      geo.computeVertexNormals();
-      const cfg = PRINT_MAT[key];
-      const mat = new THREE.MeshStandardMaterial({
-        color: cfg.solid, roughness: 0.65, metalness: 0.05,
-      });
-      mat._solidColor = cfg.solid;
-      mat._wireColor  = cfg.wire;
-      allMats.push(mat);
-      printLayerMats[key] = mat;
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.castShadow = mesh.receiveShadow = true;
-      printLayers[key].add(mesh);
-    } catch (err) {
-      console.warn(`Failed to load ${key} STL:`, err);
-    }
-  }
-
-  // Make all visible so bounding-box computations are accurate
-  Object.values(printLayers).forEach(g => { g.visible = true; });
-
-  // Pre-scale size (printGroup.scale is still 1,1,1 at this point)
-  const sz = new THREE.Vector3();
-  new THREE.Box3().setFromObject(printGroup).getSize(sz);
-
-  // Non-uniform scale: fit STL footprint exactly to sceneW × sceneD
-  const scaleX = sz.x > 0 ? sceneW / sz.x : 1;
-  const scaleZ = sz.z > 0 ? sceneD / sz.z : 1;
-  printGroup.scale.set(scaleX, scaleX, scaleZ); // Y uses scaleX (height stays proportional to X)
-
-  // Centre the model at scene origin, just above the ground
-  const worldBox = new THREE.Box3().setFromObject(printGroup);
-  const centre = new THREE.Vector3();
-  worldBox.getCenter(centre);
-  printGroup.position.set(-centre.x, -worldBox.min.y + 1, -centre.z);
-
-  // Stacking rest positions — water bottom at buildings top, land bottom at water top
-  const bldWB = new THREE.Box3().setFromObject(printLayers.buildings);
-  const watWB = new THREE.Box3().setFromObject(printLayers.water);
-  const lndWB = new THREE.Box3().setFromObject(printLayers.land);
-  const bldTop = bldWB.max.y;
-  const watH   = watWB.max.y - watWB.min.y;
-  _watRestLocalY = (bldTop - watWB.min.y) / scaleX;
-  _lndRestLocalY = (bldTop + watH - lndWB.min.y) / scaleX;
-
-  // ── Baseplate — merged visually with buildings as the "ground layer" ─────
-  const bpW = sz.x, bpD = sz.z;
-  const bpH = 0.008 * Math.max(bpW, bpD);
-  const bpGeo = new THREE.BoxGeometry(bpW, bpH, bpD);
-  const bpMat = new THREE.MeshStandardMaterial({ color: 0x787870, roughness: 0.85, metalness: 0.04 });
-  bpMat._solidColor = 0x787870;
-  bpMat._wireColor  = 0x778899;
-  allMats.push(bpMat);
-  const bpMesh = new THREE.Mesh(bpGeo, bpMat);
-  bpMesh.castShadow = bpMesh.receiveShadow = true;
-  // Position in pre-scale local space below the buildings bottom
-  const bldLocalMinY = (bldWB.min.y - printGroup.position.y) / scaleX;
-  bpMesh.position.set(0, bldLocalMinY - bpH / 2, 0);
-  baseplateGroup.add(bpMesh);
-
-  Object.values(printLayers).forEach(g => { g.visible = false; });
-  printLoaded = true;
-  setStatus('');
-}
-
-async function runPrintAnimation() {
-  // Fall distance in LOCAL space (so world drop = fallLocal * printGroup.scale.y)
-  const fallWorld = Math.max(sceneW, sceneD) * 0.14;
-  const fallLocal = fallWorld / printGroup.scale.y;
-  const bldMat = printLayerMats.buildings;
-  const watMat = printLayerMats.water;
-  const lndMat = printLayerMats.land;
-
-  // Phase 1 — buildings + baseplate: fade in solid as one merged base layer
-  baseplateGroup.visible = true;
-  if (bldMat) { bldMat.wireframe = false; bldMat.transparent = true; bldMat.opacity = 0; bldMat.color.set(bldMat._solidColor); }
-  printLayers.buildings.visible = true;
-  await animateMs(900, t => { if (bldMat) bldMat.opacity = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; });
-  if (bldMat) { bldMat.transparent = false; bldMat.opacity = 1; }
-
-  await new Promise(r => setTimeout(r, 200));
-
-  // Phase 2 — water: descend from above buildings top (ease-out cubic)
-  if (watMat) { watMat.wireframe = false; watMat.transparent = false; watMat.color.set(watMat._solidColor); }
-  printLayers.water.position.y = _watRestLocalY + fallLocal;
-  printLayers.water.visible = true;
-  await animateMs(900, t => {
-    printLayers.water.position.y = _watRestLocalY + fallLocal * Math.pow(1 - t, 3);
-  });
-  printLayers.water.position.y = _watRestLocalY;
-
-  await new Promise(r => setTimeout(r, 150));
-
-  // Phase 3 — land lid: descend from above water top (ease-out cubic)
-  if (lndMat) { lndMat.wireframe = false; lndMat.transparent = false; lndMat.color.set(lndMat._solidColor); }
-  printLayers.land.position.y = _lndRestLocalY + fallLocal * 1.3;
-  printLayers.land.visible = true;
-  await animateMs(900, t => {
-    printLayers.land.position.y = _lndRestLocalY + fallLocal * 1.3 * Math.pow(1 - t, 3);
-  });
-  printLayers.land.position.y = _lndRestLocalY;
 }
 
 let fabricLoaded = false;
@@ -904,42 +704,47 @@ async function loadFabricPreview() {
   setStatus('');
 }
 
+// ── 3D Print navigation (for 3D merch) ───────────────────────────────────────
+if (is3dPrint && hasPrintParts) {
+  btnMode?.addEventListener('click', () => {
+    localStorage.setItem('hoas_print_data', JSON.stringify({
+      west, south, east, north,
+      stl_buildings_url: stlBuildings,
+      stl_land_url: stlLand,
+      stl_water_url: stlWater,
+      svg_url: svgUrl,
+      merch_type: merch,
+      coaster_shape: coasterShape,
+      palette_overrides: paletteOverrides,
+    }));
+    window.location.href = '/3d-print.html';
+  });
+}
+
+// ── Fabric preview toggle (for non-3D merch) ─────────────────────────────────
 let showingPreview = false;
 
-btnMode?.addEventListener('click', async function() {
-  if (!showingPreview) {
-    this.textContent = 'Loading…';
-    this.classList.add('on');
-    if (is3dPrint) {
-      await loadPrintParts();
-      osmGroup.visible   = false;
-      ground.visible     = false;
-      printGroup.visible = true;
-      // Show the baseplate tray immediately so water/land have something to drop onto
-      baseplateGroup.visible = true;
-      showingPreview     = true;
-      this.textContent   = '🌍 Map View';
-      await new Promise(r => setTimeout(r, 400)); // let viewer settle on the tray
-      await runPrintAnimation();
-    } else {
+if (!is3dPrint) {
+  btnMode?.addEventListener('click', async function() {
+    if (!showingPreview) {
+      this.textContent = 'Loading…';
+      this.classList.add('on');
       await loadFabricPreview();
       fabricGroup.visible = true;
       osmGroup.visible    = false;
       showingPreview      = true;
       this.textContent    = '🌍 Map View';
+    } else {
+      showingPreview      = false;
+      osmGroup.visible    = true;
+      ground.visible      = true;
+      fabricGroup.visible = false;
+      if (matGround.map) { matGround.color.set(0xffffff); matGround.needsUpdate = true; }
+      this.textContent    = '🖼 Fabric Preview';
+      this.classList.remove('on');
     }
-  } else {
-    showingPreview         = false;
-    osmGroup.visible       = true;
-    ground.visible         = true;
-    printGroup.visible     = false;
-    fabricGroup.visible    = false;
-    baseplateGroup.visible = false;
-    if (is3dPrint) Object.values(printLayers).forEach(g => { g.visible = false; g.position.y = 0; });
-    this.textContent    = is3dPrint ? '🖨 Print Preview' : '🖼 Fabric Preview';
-    this.classList.remove('on');
-  }
-});
+  });
+}
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
 let wireframe = false;
@@ -951,79 +756,19 @@ document.getElementById('btn-wire').addEventListener('click', function() {
     m.wireframe = wireframe;
     m.color.set(wireframe ? m._wireColor : m._solidColor);
   });
-  grid.material[0].color.set(wireframe ? 0x0055ff : 0x2244aa);
-  grid.material[1].color.set(wireframe ? 0x003399 : 0x1a3366);
   this.classList.toggle('on', wireframe);
   this.textContent = wireframe ? '⬡ Solid' : '⬡ Wireframe';
 });
 
-// ── Parameters panel + live regenerate ───────────────────────────────────────
-if (is3dPrint && hasPrintParts) {
-  document.getElementById('params-panel').style.display = 'block';
-
-  // Populate inputs from URL defaults
-  const pGet = (id, def) => { const el = document.getElementById(id); if (el) el.value = def; };
-  pGet('p-bldg-h',  4);   pGet('p-water-s', 1);  pGet('p-water-e', 2);
-  pGet('p-land-s',  2);   pGet('p-land-e',  3);
-  pGet('p-gap',   0.8);   pGet('p-wexp',  0.5);   pGet('p-minb',   1);
-
-  document.getElementById('btn-regen').addEventListener('click', async function() {
-    const regenStatus = document.getElementById('regen-status');
-    this.disabled = true;
-    this.textContent = '⟳ Regenerating…';
-    regenStatus.textContent = 'Fetching new STL from backend…';
-
-    const body = {
-      bbox:  { west, south, east, north },
-      merch_type:      merch,
-      bldg_height:     parseFloat(document.getElementById('p-bldg-h').value),
-      water_start:     parseFloat(document.getElementById('p-water-s').value),
-      water_end:       parseFloat(document.getElementById('p-water-e').value),
-      land_start:      parseFloat(document.getElementById('p-land-s').value),
-      land_end:        parseFloat(document.getElementById('p-land-e').value),
-      gap_close_mm:    parseFloat(document.getElementById('p-gap').value),
-      water_expand_mm: parseFloat(document.getElementById('p-wexp').value),
-      min_bldg_mm:     parseFloat(document.getElementById('p-minb').value),
-      collar_mm:       parseFloat(document.getElementById('p-col').value),
-    };
-
-    try {
-      const resp  = await fetch('/api/generate/stl', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      });
-      if (!resp.ok) throw new Error(`Server ${resp.status}`);
-      const result = await resp.json();
-
-      // Update download links
-      stlBuildings = result.stl_buildings_url;
-      stlLand      = result.stl_land_url;
-      stlWater     = result.stl_water_url;
-      document.getElementById('dl-buildings').href = stlBuildings;
-      document.getElementById('dl-land').href      = stlLand;
-      document.getElementById('dl-water').href     = stlWater;
-
-      // Reload print preview with new parts (clear meshes, keep sub-groups)
-      Object.values(printLayers).forEach(g => g.clear());
-      printLoaded = false;
-
-      if (showingPreview) {
-        Object.values(printLayers).forEach(g => { g.visible = false; g.position.y = 0; });
-        await loadPrintParts();
-        await runPrintAnimation();
-      }
-
-      regenStatus.textContent = 'Done ✓';
-      setTimeout(() => { regenStatus.textContent = ''; }, 3000);
-    } catch (err) {
-      regenStatus.textContent = `Error: ${err.message}`;
-    } finally {
-      this.disabled = false;
-      this.textContent = '⟳ Regenerate STL';
-    }
-  });
-}
+// ── User section ─────────────────────────────────────────────────────────────
+const emailEl3d = document.getElementById('user-email-3d');
+if (emailEl3d) emailEl3d.textContent = localStorage.getItem('hoas_email') || '';
+document.getElementById('btn-my-designs-3d')?.addEventListener('click', () => {
+  if (window.parent !== window) window.parent.postMessage({ type: 'open-designs' }, '*');
+});
+document.getElementById('btn-logout-3d')?.addEventListener('click', () => {
+  if (window.parent !== window) window.parent.postMessage({ type: 'logout' }, '*');
+});
 
 // ── Auto-rotate ───────────────────────────────────────────────────────────────
 document.getElementById('btn-rotate').addEventListener('click', function() {
