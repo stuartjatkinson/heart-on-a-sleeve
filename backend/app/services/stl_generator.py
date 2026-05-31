@@ -406,27 +406,11 @@ def _extrude(poly: Polygon, height: float, z_base: float = 0.0) -> trimesh.Trime
         return None
     try:
         m = trimesh.creation.extrude_polygon(poly, height)
-        # Snap Z to exact 0 / height to eliminate floating-point tilt artifacts
-        vz = m.vertices[:, 2]
-        tol = height * 0.01
-        vz[vz < tol] = 0.0
-        vz[np.abs(vz - height) < tol] = height
-        m.vertices[:, 2] = vz
         if z_base:
             m.apply_translation([0, 0, z_base])
         return m
     except Exception:
-        # Retry with a simplified polygon if the first attempt failed
-        try:
-            simplified = make_valid(poly.simplify(0.15, preserve_topology=True))
-            if simplified.is_empty or simplified.area < 0.05:
-                return None
-            m = trimesh.creation.extrude_polygon(simplified, height)
-            if z_base:
-                m.apply_translation([0, 0, z_base])
-            return m
-        except Exception:
-            return None
+        return None
 
 def _export(meshes: list) -> BytesIO:
     meshes = [m for m in meshes if m is not None]
