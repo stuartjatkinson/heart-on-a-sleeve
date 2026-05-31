@@ -21,27 +21,18 @@ MAIN_ROADS  = {'motorway', 'trunk', 'primary', 'secondary'}
 OTHER_ROADS = {'tertiary', 'residential', 'unclassified', 'service', 'living_street', 'road'}
 PATHS       = {'footway', 'cycleway', 'path', 'pedestrian', 'track', 'bridleway', 'steps'}
 
-# Physical road widths in mm — matches stl_generator.ROAD_WIDTH_MM so the SVG
-# texture and the STL geometry are always at the same scale relative to the plate.
-# SVG stroke px = width_mm × (svg_canvas_px / plate_mm).
-ROAD_WIDTH_MM: dict[str, float] = {
-    'motorway': 3.0, 'trunk': 2.8, 'primary': 2.5, 'secondary': 2.0,
-    'tertiary': 1.5, 'residential': 1.2, 'unclassified': 1.2,
-    'service': 0.8, 'living_street': 1.2, 'road': 1.2,
-    'footway': 0.4, 'cycleway': 0.4, 'path': 0.4,
-    'pedestrian': 0.6, 'track': 0.4, 'bridleway': 0.4, 'steps': 0.4,
+ROAD_WIDTH: dict[str, float] = {
+    'motorway': 1.2, 'trunk': 1.2, 'primary': 1.0, 'secondary': 0.9,
+    'tertiary': 0.8, 'residential': 0.7, 'unclassified': 0.7,
+    'service': 0.6, 'living_street': 0.7, 'road': 0.7,
+    'footway': 0.7, 'cycleway': 0.7, 'path': 0.7,
+    'pedestrian': 0.7, 'track': 0.6, 'bridleway': 0.6, 'steps': 0.6,
 }
 
 RAILWAY_TYPES = {'rail', 'tram', 'subway', 'light_rail', 'narrow_gauge', 'monorail'}
-RAILWAY_WIDTH_MM: dict[str, float] = {
+RAILWAY_WIDTH: dict[str, float] = {
     'rail': 0.8, 'tram': 0.5, 'subway': 0.6, 'light_rail': 0.5,
     'narrow_gauge': 0.6, 'monorail': 0.5,
-}
-
-# Physical plate widths per merch type (mm) — matches stl_generator.PLATE_MM
-PLATE_W_MM: dict[str, float] = {
-    'tshirt': 100.0, 'mug': 150.0, 'placemat': 150.0,
-    'coaster': 95.0, 'tote': 100.0, '3d_print': 100.0,
 }
 
 # ---------------------------------------------------------------------------
@@ -75,8 +66,8 @@ NATURAL_AGRI = {'wood', 'scrub', 'heath', 'grassland', 'fell',
 # water polygon identifiers
 WATER_POLYGON = {'water', 'reservoir', 'basin', 'lagoon', 'lake', 'pond'}
 WATERWAY_LINE = {'river', 'canal', 'stream', 'drain', 'ditch'}
-WATERWAY_WIDTH_MM: dict[str, float] = {
-    'river': 4.0, 'canal': 3.0, 'stream': 1.5, 'drain': 1.0, 'ditch': 0.6,
+WATERWAY_LINE_WIDTH: dict[str, float] = {
+    'river': 1.2, 'canal': 1.0, 'stream': 0.7, 'drain': 0.5, 'ditch': 0.4,
 }
 
 # ---------------------------------------------------------------------------
@@ -158,7 +149,6 @@ class SVGGenerator:
         self._bbox: tuple[float, float, float, float] = (-0.13, 51.50, -0.11, 51.52)
         self._svg_w: int = 3000
         self._svg_h: int = 4000
-        self._road_px_scale: float = 1.0
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -181,10 +171,6 @@ class SVGGenerator:
         self._svg_w = spec['width_px']
         self._svg_h = spec['height_px']
         self._bbox  = bbox or self._bbox_from_nodes()
-
-        # Derive SVG stroke widths from the same physical mm values the STL uses,
-        # so the SVG texture and the extruded geometry are always at the same scale.
-        self._road_px_scale = self._svg_w / PLATE_W_MM.get(merch_type, 100.0)
 
         palette = dict(STYLES.get(style, STYLES['osm_default']))
         if palette_overrides:
@@ -339,9 +325,9 @@ class SVGGenerator:
             elif ww in WATERWAY_LINE:
                 pts = self._way_points(way)
                 if len(pts) >= 2:
-                    w = WATERWAY_WIDTH_MM.get(ww, 1.5) * self._road_px_scale
+                    w = WATERWAY_LINE_WIDTH.get(ww, 0.7)
                     self._g.add(svg.path(d=self._path_d(pts),
-                                        stroke=color, stroke_width=round(w, 2),
+                                        stroke=color, stroke_width=w,
                                         fill='none', stroke_linecap='round',
                                         stroke_linejoin='round'))
 
@@ -396,9 +382,9 @@ class SVGGenerator:
             pts = self._way_points(way)
             if len(pts) < 2:
                 continue
-            w = ROAD_WIDTH_MM.get(hw, 1.2) * self._road_px_scale
+            w = ROAD_WIDTH.get(hw, 0.7)
             self._g.add(svg.path(d=self._path_d(pts),
-                                stroke=color, stroke_width=round(w, 2),
+                                stroke=color, stroke_width=w,
                                 fill='none', stroke_linecap='round',
                                 stroke_linejoin='round'))
 
@@ -411,9 +397,9 @@ class SVGGenerator:
             pts = self._way_points(way)
             if len(pts) < 2:
                 continue
-            w = RAILWAY_WIDTH_MM.get(rw, 0.8) * self._road_px_scale
+            w = RAILWAY_WIDTH.get(rw, 0.6)
             self._g.add(svg.path(d=self._path_d(pts),
-                                stroke=p['railway'], stroke_width=round(w, 2),
+                                stroke=p['railway'], stroke_width=w,
                                 fill='none', stroke_linecap='butt',
                                 stroke_linejoin='round'))
 
