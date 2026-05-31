@@ -377,7 +377,7 @@ function enterEditing(s: RotSel): void {
   viewer.scene.screenSpaceCameraController.enableRotate = true;
   setCursor('default'); updateBboxDisplay();
   const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
-  genBtn.disabled = false; genBtn.onclick = generate;
+  genBtn.onclick = generate;
 
   handler.setInputAction((e: Cesium.ScreenSpaceEventHandler.MotionEvent) => {
     if (editState !== 'editing') return;
@@ -467,13 +467,27 @@ function exitEditing(): void {
   setCursor('default');
 }
 
+const MAX_AREA_KM2 = 100;
+
+function selAreaKm2(sel: RotSel): number {
+  const b = rotSelAabb(sel);
+  const cosLat = Math.cos((b.south + b.north) / 2 * Math.PI / 180);
+  return (b.east - b.west) * cosLat * 111.32 * (b.north - b.south) * 111.32;
+}
+
 function updateBboxDisplay(): void {
   if (!_live) return;
   const b = rotSelAabb(_live);
+  const km2 = selAreaKm2(_live);
+  const overLimit = km2 > MAX_AREA_KM2;
   document.getElementById('bbox-display')!.innerHTML =
     `N:&nbsp;${b.north.toFixed(4)} &nbsp; S:&nbsp;${b.south.toFixed(4)}<br>` +
     `E:&nbsp;${b.east.toFixed(4)} &nbsp; W:&nbsp;${b.west.toFixed(4)}` +
-    (_live.rot !== 0 ? ` &nbsp; ↻&nbsp;${(_live.rot * 180 / Math.PI).toFixed(1)}°` : '');
+    (_live.rot !== 0 ? ` &nbsp; ↻&nbsp;${(_live.rot * 180 / Math.PI).toFixed(1)}°` : '') +
+    `<br><span style="color:${overLimit ? '#ff6060' : '#888'}">${Math.round(km2 * 10) / 10}&nbsp;km²${overLimit ? ' — max 100km²' : ''}</span>`;
+  const genBtn = document.getElementById('generate-btn') as HTMLButtonElement;
+  if (overLimit) genBtn.disabled = true;
+  else if (confirmed) genBtn.disabled = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +502,6 @@ function clearGeneratedState(): void {
   svgCurrentText = '';
 
   document.getElementById('viewer-3d-view')!.style.display = 'none';
-  document.getElementById('stl-links-3d')!.style.display = 'none';
 
   if (svgView.style.display !== 'none') {
     svgView.style.display = 'none';
@@ -505,7 +518,7 @@ function clearGeneratedState(): void {
   const _btn = document.getElementById('generate-btn') as HTMLButtonElement;
   (document.getElementById('btn-text') as HTMLElement).textContent = 'Generate Design';
   (document.getElementById('spinner') as HTMLElement).style.display = 'none';
-  _btn.disabled = !confirmed;
+  _btn.disabled = !confirmed || !!(confirmed && selAreaKm2(confirmed) > MAX_AREA_KM2);
   _btn.onclick = generate;
 }
 
@@ -1196,6 +1209,7 @@ async function generate(): Promise<void> {
   const _t0 = performance.now();
   const _cosLat = Math.cos((bbox.south + bbox.north) / 2 * Math.PI / 180);
   const _km2 = Math.round((bbox.east - bbox.west) * _cosLat * 111.32 * (bbox.north - bbox.south) * 111.32 * 100) / 100;
+  if (_km2 > MAX_AREA_KM2) { clearGeneratedState(); return; }
   const _area = `km2=${_km2}`;
   tPost('generate_start', 0, _area);
 
@@ -1468,14 +1482,6 @@ function onStlReady(): void {
   if (!['coaster','placemat','3d_print'].includes(merchType)) return;
   if (svgView.style.display === 'none') return;
   document.getElementById('svg-save-section')!.style.display = '';
-  if (svgCurrentStl) {
-    const stlDiv = document.getElementById('stl-links-3d')!;
-    stlDiv.style.display = 'flex';
-    if (svgCurrentStl.stl_solid_url)     (document.getElementById('dl-solid-3d')     as HTMLAnchorElement).href = svgCurrentStl.stl_solid_url;
-    if (svgCurrentStl.stl_buildings_url) (document.getElementById('dl-buildings-3d') as HTMLAnchorElement).href = svgCurrentStl.stl_buildings_url;
-    if (svgCurrentStl.stl_land_url)      (document.getElementById('dl-land-3d')      as HTMLAnchorElement).href = svgCurrentStl.stl_land_url;
-    if (svgCurrentStl.stl_water_url)     (document.getElementById('dl-water-3d')     as HTMLAnchorElement).href = svgCurrentStl.stl_water_url;
-  }
   const statusEl = document.getElementById('svg-save-status')!;
   statusEl.textContent = '3D model ready — save your design';
   setTimeout(() => { if (statusEl.textContent.startsWith('3D model')) statusEl.textContent = ''; }, 3500);
