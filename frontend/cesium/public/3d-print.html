@@ -79,10 +79,8 @@
 
   <div class="divider"></div>
   <div class="dl-label">Download print files:</div>
-  <a class="btn" id="dl-solid-print"     download="solid.stl"     style="display:none;border-color:#4a7a4a;color:#6aaa6a">↓ Solid STL (1-colour)</a>
-  <a class="btn" id="dl-buildings-print" download="buildings.stl">↓ Buildings (grey)</a>
-  <a class="btn" id="dl-land-print"      download="land.stl">↓ Land (green)</a>
-  <a class="btn" id="dl-water-print"     download="water.stl">↓ Water (blue)</a>
+  <button class="btn" id="dl-multicolour-print" style="border-color:#4a9eff;color:#4a9eff">↓ 3-colour set (buildings · land · water)</button>
+  <a class="btn" id="dl-singlecolour-print" download="buildings.stl" style="border-color:#909088;color:#b0b0a8">↓ Single colour (buildings &amp; roads)</a>
 
   <div class="divider"></div>
   <button class="btn" id="btn-print-regen" style="border-color:#4a9eff;color:#4a9eff">⟳ Regenerate STL</button>
@@ -340,10 +338,16 @@ if (stlB && stlL && stlW) {
 }
 
 // ── Download links ────────────────────────────────────────────────────────────
-if (stlB) document.getElementById('dl-buildings-print').href = stlB;
-if (stlL) document.getElementById('dl-land-print').href = stlL;
-if (stlW) document.getElementById('dl-water-print').href = stlW;
-if (stlS) { const el = document.getElementById('dl-solid-print'); el.href = stlS; el.style.display = ''; }
+if (stlB) document.getElementById('dl-singlecolour-print').href = stlB;
+
+document.getElementById('dl-multicolour-print').addEventListener('click', () => {
+  for (const [url, name] of [[stlB,'buildings.stl'],[stlL,'land.stl'],[stlW,'water.stl']]) {
+    if (!url) continue;
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+});
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
 let wireframe = false;
