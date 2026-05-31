@@ -22,16 +22,16 @@ OTHER_ROADS = {'tertiary', 'residential', 'unclassified', 'service', 'living_str
 PATHS       = {'footway', 'cycleway', 'path', 'pedestrian', 'track', 'bridleway', 'steps'}
 
 ROAD_WIDTH = {
-    'motorway': 5, 'trunk': 4.5, 'primary': 4, 'secondary': 3,
-    'tertiary': 2, 'residential': 1.5, 'unclassified': 1.5,
-    'service': 1, 'living_street': 1.5, 'road': 1.5,
-    'footway': 0.7, 'cycleway': 0.7, 'path': 0.7,
-    'pedestrian': 1, 'track': 0.8, 'bridleway': 0.8, 'steps': 0.7,
+    'motorway': 2, 'trunk': 1.8, 'primary': 1.5, 'secondary': 1.2,
+    'tertiary': 1, 'residential': 0.8, 'unclassified': 0.8,
+    'service': 0.6, 'living_street': 0.8, 'road': 0.8,
+    'footway': 0.5, 'cycleway': 0.5, 'path': 0.5,
+    'pedestrian': 0.6, 'track': 0.5, 'bridleway': 0.5, 'steps': 0.5,
 }
 
 RAILWAY_TYPES = {'rail', 'tram', 'subway', 'light_rail', 'narrow_gauge', 'monorail'}
-RAILWAY_WIDTH = {'rail': 2, 'tram': 1.2, 'subway': 1.5, 'light_rail': 1.2,
-                 'narrow_gauge': 1.5, 'monorail': 1}
+RAILWAY_WIDTH = {'rail': 0.8, 'tram': 0.5, 'subway': 0.6, 'light_rail': 0.5,
+                 'narrow_gauge': 0.6, 'monorail': 0.5}
 
 # ---------------------------------------------------------------------------
 # Landuse tag → group
@@ -64,7 +64,7 @@ NATURAL_AGRI = {'wood', 'scrub', 'heath', 'grassland', 'fell',
 # water polygon identifiers
 WATER_POLYGON = {'water', 'reservoir', 'basin', 'lagoon', 'lake', 'pond'}
 WATERWAY_LINE = {'river', 'canal', 'stream', 'drain', 'ditch'}
-WATERWAY_LINE_WIDTH = {'river': 4, 'canal': 3, 'stream': 1.5, 'drain': 1, 'ditch': 0.8}
+WATERWAY_LINE_WIDTH = {'river': 1.5, 'canal': 1.2, 'stream': 0.7, 'drain': 0.5, 'ditch': 0.4}
 
 # ---------------------------------------------------------------------------
 # Per-style palette + feature flags
