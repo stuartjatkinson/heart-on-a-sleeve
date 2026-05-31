@@ -195,6 +195,9 @@ class STLGenerator:
         # ── 3. Build four pieces ──────────────────────────────────────────────
         plate_shape, outer_shape = _plate_shapes(plate_w, plate_h, collar, coaster_shape)
 
+        # Guarantee land top is always flush with building tops regardless of caller values
+        land_end = bldg_h
+
         bldg_meshes  = self._buildings_piece(
             bldg_polys, bldg_heights, raw_roads,
             bldg_union, road_union, urban_union,
@@ -279,6 +282,7 @@ class STLGenerator:
         water = inner_plate if not inner_plate.is_empty else plate_shape
         if not urban_union.is_empty:
             water = make_valid(water.difference(urban_union))
+        water = _simplify_for_extrusion(water)
         thickness = max(water_end - water_start, 0.5)
         meshes = []
         for p in _geom_parts(water):
@@ -304,6 +308,10 @@ class STLGenerator:
             lid_shape = make_valid(lid_shape.difference(urban_union))
         if not water_union.is_empty:
             lid_shape = make_valid(lid_shape.difference(water_union.intersection(plate_shape)))
+
+        # Simplify before extrusion — dense urban areas on small plates (e.g. coaster)
+        # produce complex polygons with many tight holes that can cause trimesh failures.
+        lid_shape = _simplify_for_extrusion(lid_shape)
 
         thickness = max(land_end - land_start, 0.5)
 
@@ -379,16 +387,46 @@ def _geom_parts(geom) -> list[Polygon]:
     return []
 
 
+def _simplify_for_extrusion(geom, tolerance: float = 0.08) -> object:
+    """Simplify a Shapely geometry before extrusion.
+
+    Reduces vertex count on dense urban polygons (coaster plates) where many
+    tight building holes can cause trimesh's earcut triangulator to fail or
+    produce non-flat faces.  A 0.08 mm tolerance is negligible at print scale.
+    """
+    try:
+        s = geom.simplify(tolerance, preserve_topology=True)
+        return make_valid(s) if not s.is_empty else geom
+    except Exception:
+        return geom
+
+
 def _extrude(poly: Polygon, height: float, z_base: float = 0.0) -> trimesh.Trimesh | None:
     if height <= 0.01 or poly.is_empty or poly.area < 0.05:
         return None
     try:
         m = trimesh.creation.extrude_polygon(poly, height)
+        # Snap Z to exact 0 / height to eliminate floating-point tilt artifacts
+        vz = m.vertices[:, 2]
+        tol = height * 0.01
+        vz[vz < tol] = 0.0
+        vz[np.abs(vz - height) < tol] = height
+        m.vertices[:, 2] = vz
         if z_base:
             m.apply_translation([0, 0, z_base])
         return m
     except Exception:
-        return None
+        # Retry with a simplified polygon if the first attempt failed
+        try:
+            simplified = make_valid(poly.simplify(0.15, preserve_topology=True))
+            if simplified.is_empty or simplified.area < 0.05:
+                return None
+            m = trimesh.creation.extrude_polygon(simplified, height)
+            if z_base:
+                m.apply_translation([0, 0, z_base])
+            return m
+        except Exception:
+            return None
 
 def _export(meshes: list) -> BytesIO:
     meshes = [m for m in meshes if m is not None]

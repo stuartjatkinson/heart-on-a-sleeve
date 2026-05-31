@@ -160,6 +160,12 @@ if (!initSvgUrl) {
 
 // ── Merch type gating ─────────────────────────────────────────────────────────
 const is3dMerch = ['coaster', 'placemat', '3d_print'].includes(merch);
+if (is3dMerch) {
+  // Save lives on the 3D print page for 3D merch
+  document.getElementById('save-name').style.display   = 'none';
+  document.getElementById('btn-save').style.display    = 'none';
+  document.getElementById('save-status').style.display = 'none';
+}
 if (!is3dMerch) {
   document.getElementById('btn-3d').style.display = 'none';
   const dlBtn = document.getElementById('btn-dl');
