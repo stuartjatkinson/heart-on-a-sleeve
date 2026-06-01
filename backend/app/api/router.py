@@ -30,13 +30,6 @@ from app import timing_utils
 
 settings = get_settings()
 
-DATA_DIR = os.environ.get("DATA_DIR") or os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "data")
-)
-
-os.makedirs(os.path.join(DATA_DIR, "svg_output"), exist_ok=True)
-os.makedirs(os.path.join(DATA_DIR, "stl_output"), exist_ok=True)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -87,8 +80,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve generated SVG/STL files at /output/svg_output/... and /output/stl_output/...
-app.mount("/output", StaticFiles(directory=DATA_DIR), name="output")
+# Generated SVG/STL are streamed inline (base64 / text) and never persisted server-side —
+# the client holds them in-memory and regenerates on demand. No /output mount.
 
 # Mount CesiumJS frontend only when running outside Docker (source tree present)
 # CESIUM_DIR is set by main.py to frontend/cesium/dist; fallback uses __file__ resolution.
@@ -165,26 +158,8 @@ async def generate_svg(req: SVGGenerationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SVG generation failed: {e}")
 
-    from datetime import datetime
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    filename = os.path.join(DATA_DIR, "svg_output", f"design_{timestamp}.svg")
-    with open(filename, "wb") as f:
-        f.write(svg_io.read())
-    return {"svg_path": filename, "svg_url": f"/output/svg_output/design_{timestamp}.svg", "merch_type": req.merch_type}
-
-
-@app.post("/api/save-svg")
-async def save_svg(payload: dict):
-    """Accept SVG text from the client renderer and persist it to /output/svg_output/."""
-    svg_text: str = payload.get("svg_text", "")
-    if not svg_text:
-        raise HTTPException(status_code=400, detail="svg_text is required")
-    from datetime import datetime
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    filename = os.path.join(DATA_DIR, "svg_output", f"design_{timestamp}.svg")
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(svg_text)
-    return {"svg_url": f"/output/svg_output/design_{timestamp}.svg"}
+    # Stream the SVG inline — never written to disk.
+    return {"svg": svg_io.read().decode("utf-8"), "merch_type": req.merch_type}
 
 
 @app.post("/api/generate/stl")
@@ -217,15 +192,11 @@ async def generate_stl(req: STLGenerationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"STL generation failed: {e}")
 
-    from datetime import datetime
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    urls = {}
-    for part_name, bio in parts.items():
-        fname = f"design_{timestamp}_{part_name}.stl"
-        with open(os.path.join(DATA_DIR, "stl_output", fname), "wb") as f:
-            f.write(bio.read())
-        urls[f"stl_{part_name}_url"] = f"/output/stl_output/{fname}"
-    return {**urls, "merch_type": req.merch_type}
+    # Stream each STL piece inline as base64 — never written to disk. The client decodes
+    # to in-memory blobs (cached for the session); downloads come from those blobs.
+    import base64
+    out = {f"stl_{name}": base64.b64encode(bio.read()).decode("ascii") for name, bio in parts.items()}
+    return {**out, "merch_type": req.merch_type}
 
 
 @app.post("/api/license/check")

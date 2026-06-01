@@ -3,6 +3,7 @@
 ## Open
 
 - [ ] **Local dev: port 8000 blocked by WSL SSH tunnel** — `ssh` process in Ubuntu WSL binds 127.0.0.1:8000 preventing Docker backend from being reached via `localhost:8000`; only affects Vite dev-server workflow; `--profile full` (nginx) unaffected as it uses internal Docker network. Kill tunnel or temporarily remap docker-compose port *(found 2026-05-28)*
+- [ ] **Coaster shape not enforced across all 3D** — square/circle/hexagon is applied to the SVG clip and the STL plate outline (`_plate_shapes`), but the 3D-MAP ground (`viewer3d.ts` — `PlaneGeometry` + 4 axis-aligned clip planes) and the PRINT baseplate (`print-viewer.ts` — `BoxGeometry`) are always rectangular. A circle/hexagon coaster shows a rectangular ground in the 3D map and a rectangular baseplate in the print preview. Conform both to the selected shape. *(found 2026-06-01)*
 - [ ] **No server-side bbox-area cap** — backend `/api/generate/svg` (+stl/osm) accepts any bbox; only the frontend enforces `MAX_AREA_KM2`. A huge bbox ties the server up ~2 min (Overpass 60s primary + 60s mirror) and makes `test_generate_svg__bbox_too_large` flaky (client `ReadTimeout` > 120s). Add an area guard that 422s oversized bboxes before fetching. Resource/DoS concern. *(found 2026-06-01)*
 
 ## Resolved (2026-06-01 session)

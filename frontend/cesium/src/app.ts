@@ -979,6 +979,29 @@ let svgCurrentUrl = '';
 let svgCurrentStl: any = null;
 let svgRegenTimer: ReturnType<typeof setTimeout> | null = null;
 
+// STL parts arrive from the server as base64 (never persisted server-side). We decode each
+// to an in-memory blob URL the rest of the app treats like a normal URL — STLLoader.load,
+// download anchors, etc. The blobs live for the session, so revisiting/regenerating reuses
+// them with no refetch. Old URLs are revoked on replacement to avoid leaks.
+function b64ToBlobUrl(b64: string, mime = 'model/stl'): string {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
+}
+
+function stlRespToUrls(r: any): any {
+  if (svgCurrentStl) for (const k of ['stl_buildings_url', 'stl_land_url', 'stl_water_url', 'stl_solid_url']) {
+    if (typeof svgCurrentStl[k] === 'string' && svgCurrentStl[k].startsWith('blob:')) URL.revokeObjectURL(svgCurrentStl[k]);
+  }
+  const o: any = {};
+  if (r.stl_buildings) o.stl_buildings_url = b64ToBlobUrl(r.stl_buildings);
+  if (r.stl_land)      o.stl_land_url      = b64ToBlobUrl(r.stl_land);
+  if (r.stl_water)     o.stl_water_url     = b64ToBlobUrl(r.stl_water);
+  if (r.stl_solid)     o.stl_solid_url     = b64ToBlobUrl(r.stl_solid);
+  return o;
+}
+
 // Saved forward-transition state — used to drive the reverse animation
 let _transFrame: HTMLImageElement | null = null;
 let _transSel: ReturnType<typeof getSelAabb> = null;
@@ -1188,13 +1211,7 @@ svg3dBtn.addEventListener('click', async () => {
     stlSolid: svgCurrentStl?.stl_solid_url ?? null,
     paletteOverrides: svgOverrides(),
   });
-
-  if (svgCurrentText && svgCurrentUrl.startsWith('blob:')) {
-    fetch('/api/save-svg', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ svg_text: svgCurrentText }),
-    }).catch(() => {});
-  }
+  // (No /api/save-svg — the SVG is a client-side blob; nothing is persisted server-side.)
 });
 
 document.getElementById('btn-3d-back')!.addEventListener('click', () => {
@@ -1228,10 +1245,12 @@ async function regenPrintStl(): Promise<void> {
   });
   if (!r.ok) throw new Error(`Server ${r.status}`);
   const res = await r.json();
-  _printScene.stlBuildings = res.stl_buildings_url;
-  _printScene.stlLand = res.stl_land_url;
-  _printScene.stlWater = res.stl_water_url;
-  _printScene.stlSolid = res.stl_solid_url ?? null;
+  for (const [field, key] of [['stlBuildings', 'stl_buildings'], ['stlLand', 'stl_land'],
+                              ['stlWater', 'stl_water'], ['stlSolid', 'stl_solid']] as const) {
+    const cur = _printScene[field];
+    if (typeof cur === 'string' && cur.startsWith('blob:')) URL.revokeObjectURL(cur);
+    _printScene[field] = res[key] ? b64ToBlobUrl(res[key]) : null;
+  }
   _printViewer?.setScene(_printScene);
 }
 
@@ -1377,7 +1396,7 @@ const abort = new AbortController();
   osmP.then(() => {
     fetchJson('/api/generate/stl', {
       bbox, merch_type: merchType, coaster_shape: coasterShape,
-    }).then((r: any) => { svgCurrentStl = r; onStlReady(); }).catch(() => { /* ignore */ });
+    }).then((r: any) => { svgCurrentStl = stlRespToUrls(r); onStlReady(); }).catch(() => { /* ignore */ });
   }).catch(() => { /* osmP already handles its own error */ });
 
   // Estimate runs in background — updates status bar and refines progress bar when it resolves.

@@ -447,7 +447,15 @@ not navigation** (no re-pull).
      dashboard thumbnail fixed to use `thumbnail_data_url`. `svg-viewer.html` deleted. The
      dashboard↔svg-viewer pair was an orphaned legacy island — the SPA's in-app "My Designs"
      panel already replaced it. *(2026-06-01)*
-5. 📋 Client pipeline cache + stop server-side file persistence (reversibility / embeddable payoff).
+5. 🔄 Client pipeline cache + stop server-side file persistence:
+   - ✅ Server writes NOTHING: `/api/generate/svg` streams SVG text inline; `/api/generate/stl`
+     streams each piece as base64; `/api/save-svg` + the `/output` mount + `DATA_DIR` removed.
+     Smoke tests updated to the inline shapes. *(2026-06-01)*
+   - ✅ Client decodes STL base64 → in-memory blob URLs (revoked on replace); existing `_url`
+     plumbing, STLLoader, and download anchors unchanged. Combined with stage 4 (print in-SPA),
+     OSM/SVG/STL all live in SPA memory → reverse traversal reuses them, no refetch.
+   - 📋 Formal `hash(config)+stage` cache for switching between *multiple* loaded designs
+     without refetch (current cache is the single active selection's in-memory state).
 
 **Remaining legacy:** `dashboard.html` kept as a standalone gallery (Open now routes into the
 SPA); could later fold into the in-app "My Designs" panel entirely. `landing.html` + `login.html`
