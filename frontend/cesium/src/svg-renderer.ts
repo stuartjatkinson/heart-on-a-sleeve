@@ -181,8 +181,6 @@ export function renderSvg(opts: SvgRenderOptions): SVGSVGElement {
   // Build SVG element
   const svg = el('svg', { xmlns: NS, width: W, height: H, viewBox: `0 0 ${W} ${H}` }) as SVGSVGElement;
 
-  svg.appendChild(el('rect', { x:0, y:0, width:W, height:H, fill: palette['background'] as string }));
-
   // Clip path
   const defs = el('defs');
   const clip = el('clipPath', { id: 'map-clip' });
@@ -199,6 +197,9 @@ export function renderSvg(opts: SvgRenderOptions): SVGSVGElement {
 
   const g = el('g', { 'clip-path': 'url(#map-clip)' });
   svg.appendChild(g);
+  // Background lives INSIDE the clip group so non-rectangular shapes (circle/hexagon)
+  // are transparent outside the shape — the canvas corners get no fill (alpha).
+  g.appendChild(el('rect', { x:0, y:0, width:W, height:H, fill: palette['background'] as string }));
 
   function addPath(d: string, fill: string | null, stroke: string | null,
                    strokeW: number, linecap = 'butt', linejoin = 'miter') {
@@ -292,13 +293,7 @@ export function renderSvg(opts: SvgRenderOptions): SVGSVGElement {
     }
   }
 
-  // Attribution (outside clip group)
-  const attr = el('text', {
-    x:10, y: H - 10,
-    fill:'#888888', 'font-size':11, 'font-family':'Arial, sans-serif',
-  });
-  attr.textContent = '© OpenStreetMap contributors (ODbL)';
-  svg.appendChild(attr);
+  // Attribution is shown in the app status bar, not baked into generated files.
 
   return svg as SVGSVGElement;
 }

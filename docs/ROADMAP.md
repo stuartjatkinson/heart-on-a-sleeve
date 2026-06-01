@@ -388,3 +388,54 @@ Moved SVG generation from the Python backend to the browser for Cloud Run scalab
 | 8. POD Providers | 📋 Planned | |
 | 9. Auth + Dashboard | ✅ Done | JWT auth, register/login, save/dashboard, user nav |
 | 10. Deployment | 🔄 In Progress | Docker, prod compose, CI — CD + domain pending |
+
+---
+
+## Embeddable SPA consolidation (planned 2026-06-01)
+
+**Goal:** collapse the page-by-page UI into one self-contained, state-machine-driven SPA
+(sidebar · main stage · persistent status bar) so it can ship as an embeddable widget /
+single-page attachment. End model: a saved **config** drives on-demand pulls + renders held
+**entirely client-side**, with reversible animations between cached stages.
+
+**Target shell**
+```
+┌───────────┬───────────────────────────────┐
+│  SIDEBAR  │  STAGE (map | svg | 3d | print)│  ← one container, content swaps per state
+│ docked/   │                                │
+│ float/    │                                │
+│ sheet     │                                │
+├───────────┴───────────────────────────────┤
+│  STATUS BAR — tool attributions, always on │
+└─────────────────────────────────────────────┘
+```
+States: `select → svg → map3d → print3d` (+ dashboard/login overlays). **Back = state pop,
+not navigation** (no re-pull).
+
+**Page inventory**
+- Live primary: `index.html` (SPA). Auxiliary: `dashboard.html`, `login.html`, `landing.html`.
+- `3d-print.html` — live but a near-duplicate of the inline 3D viewer (own panel/loading/
+  controls/save/nav IDs). Fold into the SPA as the `print3d` state.
+- `3d-viewer.html` — **orphaned, no refs → delete** (Stage 1).
+- `svg-viewer.html` — still referenced by `dashboard.html` "Open" link; delete only once the
+  dashboard "Open" routes into the SPA (Stage 4).
+
+**Decisions**
+- Attribution: **status bar only, none in generated files** (chosen 2026-06-01). Removes
+  `_draw_attribution` (svg_generator.py) + client attribution text (svg-renderer.ts).
+  ⚠️ ODbL produced-works obligation to be handled via the app/product page, not the file.
+- Non-rect SVG (circle/hexagon coaster): background clipped to the shape → **transparent
+  outside** the shape (alpha corners).
+- **Server stores config only** (design_projects row); STOP persisting generated SVG/STL.
+  Generation endpoints stream, write nothing. Client holds a pipeline cache keyed by
+  `hash(config)+stage` (osm → svg blob → stl blobs → render snip); reverse traversal restores
+  the snip with no re-fetch/regenerate; downloads come from cached client blobs.
+
+**Stages** (each independently shippable)
+1. ✅ Delete orphaned `3d-viewer.html`. (svg-viewer.html deferred to Stage 4.) *(2026-06-01)*
+2. ✅ Persistent status bar (`.app-status-bar` in app.css; in index.html + 3d-print.html) +
+   attribution removed from generated files (svg-renderer.ts + svg_generator.py) + circle/hex
+   background clipped to the shape (transparent corners). *(2026-06-01)*
+3. 📋 Extract shared components (sidebar shell, loading bar, save, user-nav, mobile sheet); de-dup IDs.
+4. 📋 Fold `3d-print.html` into the SPA as `print3d`; re-point dashboard "Open" into SPA; delete `svg-viewer.html`.
+5. 📋 Client pipeline cache + stop server-side file persistence (reversibility / embeddable payoff).
