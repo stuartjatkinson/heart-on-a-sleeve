@@ -109,6 +109,21 @@ gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
   --role="roles/iam.serviceAccountUser"
 ```
 
+### Runtime service account — Cloud SQL access
+
+The deploy step doesn't set `--service-account`, so the Cloud Run **services run as the
+default compute service account** (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`) —
+not the deployer SA above. That account needs `cloudsql.client`, or the backend crashes on
+startup when it can't reach the database:
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+```
+
 ---
 
 ## 5. Set up Workload Identity Federation

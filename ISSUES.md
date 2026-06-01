@@ -9,6 +9,8 @@
 
 ## Resolved (2026-06-01 session)
 
+- [x] **CD to Cloud Run + Cloud SQL wiring** — first push-to-main after GCP_PROJECT_ID was set activated CD; deploy failed (Cloud SQL APIs off, backend crashing on startup). Enabled `sqladmin`/`sql-component`/`serviceusage` APIs; the `hoas-db` instance + `heart_on_a_sleeve` DB + `heart_user` already existed, so reset `heart_user`'s password, synced the `DATABASE_URL` GitHub secret, and granted the runtime SA (`<PROJECT_NUMBER>-compute@…`) `roles/cloudsql.client`. Deploy now green; verified backend `/health`=200 and a full DB round-trip (register 201 → duplicate 409 → login 200). *(resolved 2026-06-01)*
+- [x] **Frontend `/api` proxy loop on Cloud Run — `400 Request Header Or Cookie Too Large`** — `nginx.conf` set `proxy_set_header Host $host` on `/api/`; Cloud Run routes by Host, so proxied requests carried the frontend's host and were routed back to the frontend → infinite loop, `X-Forwarded-For` growing each hop until the header overflowed. Worked locally (Docker routes by address). Removed the Host override so nginx sends the backend's hostname (its proxy_pass default). *(resolved 2026-06-01)*
 - [x] **CI smoke tests all fail — `aiosqlite` missing** — CI sets no `DATABASE_URL`, so the backend falls back to its default `sqlite+aiosqlite://` driver, but `aiosqlite` wasn't in `requirements.txt`; the server failed to start (`ModuleNotFoundError`) and all 18 smoke tests errored with connection-refused. Pre-existing (Docker uses Postgres/asyncpg locally so it was masked). Added `aiosqlite>=0.20.0`. *(resolved 2026-06-01)*
 
 - [x] **Dead duplicate app `endpoints.py`** (GH #14) — deleted the orphaned 131-line second FastAPI app; nothing imported it *(resolved 2026-06-01)*
