@@ -33,11 +33,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://heart_user:heart_password@database:5432/heart_on_a_sleeve
       OVERPASS_ENDPOINT: https://overpass-api.de/api/interpreter
-      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080
+      CORS_ORIGINS: http://localhost:5174,http://localhost:3000,http://localhost:8080
       DATA_DIR: /data
       PORT: "8000"
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./backend:/app
       - ./data:/data
