@@ -102,3 +102,119 @@
 - [x] **Merch type icons** — emoji icons added to all 6 merch buttons *(resolved 2026-05-23)*
 - [x] **3D params explained + expandable** — each STL parameter has a description line; panel split into two collapsible `<details>` groups *(resolved 2026-05-23)*
 
+
+## Migrated from GitHub Issues (closed 2026-06-30)
+
+> Issue tracking consolidated into this file during the portfolio alignment sweep. The 9 GitHub issues below were closed on GitHub and preserved here as the single source of truth. Tick off as resolved.
+
+- [ ] **#11 [security] Refresh token passed as URL query parameter**
+  > `backend/app/api/auth.py:85`
+  > 
+  > ```python
+  > async def refresh(refresh_token: str, db: AsyncSession = Depends(get_db)):
+  > ```
+  > 
+  > A bare `str` parameter on a POST handler is bound by FastAPI as a **query parameter**, so the call is `POST /api/auth/refresh?refresh_token=...`. Refresh tokens then leak into nginx/Cloud Run access logs, proxy logs, and browser history.
+  > 
+  > **Fix:** accept it in the request body via a Pydantic model:
+  > 
+  > ```python
+  > class RefreshRequest(BaseModel):
+  >     refresh_token: str
+  > 
+  > @router.post("/refresh")
+  > async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
+  >     ...
+  > ```
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#12 [security] CORS wildcard + allow_credentials in Cloud Run deploy**
+  > `.github/workflows/ci.yml:236`
+  > 
+  > ```yaml
+  > CORS_ORIGINS=${{ vars.FRONTEND_URL || '*' }}
+  > ```
+  > 
+  > combined with `allow_credentials=True` in `backend/app/api/router.py:80`. A `*` origin together with credentials is invalid (browsers reject it) and is a classic misconfiguration footgun.
+  > 
+  > **Fix:** fail closed — require `FRONTEND_URL` to be set explicitly rather than defaulting to `*`, or drop `allow_credentials` if wildcard origins are genuinely intended.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#13 [security] No guard on default SECRET_KEY**
+  > `backend/app/core/config.py:29`
+  > 
+  > ```python
+  > secret_key: str = "change-me-in-production"
+  > ```
+  > 
+  > Nothing asserts this default was overridden. `docker-compose.prod.yml` correctly requires it (`${SECRET_KEY:?...}`), but a bare `python main.py` run or a misconfigured Cloud Run deploy would silently sign JWTs with a publicly-known constant.
+  > 
+  > **Fix:** add a startup assertion in `lifespan` (or `get_settings`) that raises if `secret_key == "change-me-in-production"` outside of dev.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#14 [cleanup] Delete orphaned duplicate FastAPI app endpoints.py**
+  > `backend/app/api/endpoints.py` (131 lines) is an orphaned second `FastAPI()` app. Nothing imports it — `backend/main.py`, both compose files, and CI all run `app.api.router:app`.
+  > 
+  > It has drifted from the live `router.py`: references STL args `height_mm`/`base_thickness_mm` that no longer exist on the real handler, uses `/output/svg` paths, and has its own divergent `lifespan`. It's a maintenance trap and muddies the security surface.
+  > 
+  > **Fix:** delete the file.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#15 [hygiene] SQLite db and data/ not gitignored**
+  > `.gitignore` ignores `backend/data/` but not:
+  > 
+  > - `backend/heart_on_a_sleeve.db` (SQLite dev db — untracked, **not** ignored)
+  > - root `data/` containing `svg_output/` and `stl_output/` (untracked, **not** ignored — yet `docker-compose.yml` mounts `./data`)
+  > 
+  > One `git add .` from committing build artifacts and a local database.
+  > 
+  > **Fix:** add `*.db` and `/data/` to `.gitignore`.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#16 [bug] Output filename collisions at second granularity**
+  > `backend/app/api/router.py` — `generate_svg` and `generate_stl` build output filenames with second-granularity timestamps:
+  > 
+  > ```python
+  > timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+  > ```
+  > 
+  > Two requests within the same second overwrite each other. `save_svg` already uses microseconds (`%Y%m%d%H%M%S%f`), so the codebase is inconsistent.
+  > 
+  > **Fix:** use microseconds or a uuid4 suffix everywhere.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#17 [cleanup] Remove dead _current_bbox global and unused schemas**
+  > - `_current_bbox` in `backend/app/api/router.py:110` is written on every generate call but never read; a module-level mutable is also concurrency-unsafe.
+  > - `MerchType`, `DesignProjectCreate`, and `DesignProjectResponse` in `backend/app/models/schemas.py` appear unused (responses are built ad-hoc as dicts).
+  > 
+  > **Fix:** remove `_current_bbox` and prune the unused schemas (confirm no references first).
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#18 [hygiene] Startup logs at WARNING + silent migration except**
+  > `backend/app/api/router.py` `lifespan`:
+  > 
+  > - Routine startup is logged at `log.warning(...)` (DB driver, metadata tables, create_all result) — reads like leftover debugging; demote to `info`/`debug`.
+  > - The ad-hoc column migration loop uses a bare `except Exception: pass`, which hides genuine failures. Log at `debug` so a real error isn't invisible.
+  > 
+  > Found during project review 2026-06-01.
+
+- [ ] **#19 [bug] Coaster shape not enforced in 3D map ground + print baseplate**
+  > The selected coaster shape (square / circle / hexagon) is applied to the SVG clip path and the STL plate outline (`stl_generator._plate_shapes`), but **not** to two 3D surfaces:
+  > 
+  > - **3D map ground** — `frontend/cesium/src/viewer3d.ts` uses a `PlaneGeometry` plus 4 axis-aligned clipping planes, so the ground is always rectangular.
+  > - **Print baseplate** — `frontend/cesium/src/print-viewer.ts` builds the baseplate as a `BoxGeometry`, always rectangular.
+  > 
+  > Result: a circle/hexagon coaster shows a rectangular ground in the 3D map and a rectangular baseplate in the print preview, inconsistent with the SVG and the STL plate.
+  > 
+  > **Fix:** derive the ground/baseplate outline from the same shape source (circle → disc, hexagon → hex prism) so geometry is enforced consistently across SVG, 3D map, and print.
+  > 
+  > Found during dev 2026-06-01.
+
+
