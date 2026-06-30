@@ -503,3 +503,23 @@ stacked at the bottom. So treat sidebar / stage / status as the only three top-l
 **Status:** 🔶 in progress — status-bar consolidation and shell/panel alignment done; the
 preflight element-count gate itself is still 📋 planned. (User is fine with unfiltered fetch +
 Overpass coin-flips until this lands.)
+
+---
+
+## Portfolio alignment — map-suite seed; share cosLat with place-time (FEATURE-MATRIX §I)
+
+heart-on-a-sleeve is the portfolio's canonical for **OSM→SVG/STL rendering + the Cesium
+selection UI + cosLat projection**. Source:
+`H:\GitHub\heart-on-a-sleeve\backend\app\services\osm_fetcher.py`,
+`svg_generator.py` (cosLat projection), `stl_generator.py`.
+
+The sibling canonical is place-time for **H3 spatial indexing + temporal layers +
+multi-source geo ingestion** (`H:\GitHub\place-time\src\ingest\historical.ts` holds its
+own Overpass client). git-suite PLAN.md plans a `map-suite` hub — **these two repos are
+its seed.**
+
+**Caveat (real):** the two are different runtimes (this repo Python, place-time
+TypeScript), so no literal shared import today. Share now as a **documented spec**: the
+Overpass query templates (place-time-owned) and the cosLat projection math
+(this-repo-owned), so both copies stay in sync. When `map-suite` is built, one runtime
+hosts both helpers first-class.
